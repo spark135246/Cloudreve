@@ -75,6 +75,61 @@ func (fs *FileSystem) Upload(ctx context.Context, file FileHeader) (err error) {
 	return nil
 }
 
+// Upload1 上传文件
+func (fs *FileSystem) Upload1(ctx context.Context, file FileHeader, srcPath string) (err error) {
+	ctx = context.WithValue(ctx, fsctx.FileHeaderCtx, file)
+
+	// 上传前的钩子
+	err = fs.Trigger(ctx, "BeforeUpload")
+	if err != nil {
+		request.BlackHole(file)
+		return err
+	}
+
+	// 生成文件名和路径,
+	var savePath string
+	// 如果是更新操作就从上下文中获取
+	if originFile, ok := ctx.Value(fsctx.FileModelCtx).(model.File); ok {
+		savePath = originFile.SourceName
+	} else {
+		savePath = fs.GenerateSavePath(ctx, file)
+	}
+	ctx = context.WithValue(ctx, fsctx.SavePathCtx, savePath)
+
+	// 处理客户端未完成上传时，关闭连接
+	go fs.CancelUpload(ctx, savePath, file)
+
+	// 保存文件
+	err = fs.Handler.Put(ctx, file, savePath, file.GetSize())
+	if err != nil {
+		fs.Trigger(ctx, "AfterUploadFailed")
+		return err
+	}
+
+	// 上传完成后的钩子
+	err = fs.Trigger(ctx, "AfterUpload")
+
+	if err != nil {
+		// 上传完成后续处理失败
+		followUpErr := fs.Trigger(ctx, "AfterValidateFailed")
+		// 失败后再失败...
+		if followUpErr != nil {
+			util.Log().Debug("AfterValidateFailed 钩子执行失败，%s", followUpErr)
+		}
+
+		return err
+	}
+
+	util.Log().Info(
+		"新文件PUT:%s , 大小:%d, 上传者:%s",
+		file.GetFileName(),
+		file.GetSize(),
+		fs.User.Nick,
+	)
+
+	return nil
+}
+
 // GenerateSavePath 生成要存放文件的路径
 // TODO 完善测试
 func (fs *FileSystem) GenerateSavePath(ctx context.Context, file FileHeader) string {
@@ -226,6 +281,37 @@ func (fs *FileSystem) UploadFromStream(ctx context.Context, src io.ReadCloser, d
 	return fs.Upload(ctx, fileData)
 }
 
+// UploadFromStream1 从文件流上传文件
+// 重载函数，新增源文件路径参数
+func (fs *FileSystem) UploadFromStream1(ctx context.Context, src io.ReadCloser, dst string, size uint64, srcPath string) error {
+	// 构建文件头
+	fileName := path.Base(dst)
+	filePath := path.Dir(dst)
+	fileData := local.FileStream{
+		File:        src,
+		Size:        size,
+		Name:        fileName,
+		VirtualPath: filePath,
+	}
+
+	// 给文件系统分配钩子
+	fs.Lock.Lock()
+	if fs.Hooks == nil {
+		fs.Use("BeforeUpload", HookValidateFile)
+		fs.Use("BeforeUpload", HookValidateCapacity)
+		fs.Use("AfterUploadCanceled", HookDeleteTempFile)
+		fs.Use("AfterUploadCanceled", HookGiveBackCapacity)
+		fs.Use("AfterUpload", GenericAfterUpload)
+		fs.Use("AfterValidateFailed", HookDeleteTempFile)
+		fs.Use("AfterValidateFailed", HookGiveBackCapacity)
+		fs.Use("AfterUploadFailed", HookGiveBackCapacity)
+	}
+	fs.Lock.Unlock()
+
+	// 开始上传
+	return fs.Upload1(ctx, fileData, srcPath)
+}
+
 // UploadFromPath 将本机已有文件上传到用户的文件系统
 func (fs *FileSystem) UploadFromPath(ctx context.Context, src, dst string) error {
 	// 重设存储策略
@@ -249,5 +335,5 @@ func (fs *FileSystem) UploadFromPath(ctx context.Context, src, dst string) error
 	size := fi.Size()
 
 	// 开始上传
-	return fs.UploadFromStream(ctx, file, dst, uint64(size))
+	return fs.UploadFromStream1(ctx, file, dst, uint64(size), util.RelativePath(src))
 }

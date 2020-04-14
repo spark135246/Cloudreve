@@ -111,6 +111,10 @@ func (handler Driver) Put(ctx context.Context, file io.ReadCloser, dst string, s
 	return err
 }
 
+func (handler Driver) Move(ctx context.Context, file io.ReadCloser, dst string, size uint64, srcPath string) error {
+	return handler.Put(ctx, file, dst, size)
+}
+
 // Delete 删除一个或多个文件，
 // 返回未删除的文件，及遇到的最后一个错误
 func (handler Driver) Delete(ctx context.Context, files []string) ([]string, error) {
