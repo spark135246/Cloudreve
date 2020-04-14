@@ -47,6 +47,9 @@ type Handler interface {
 	// 时，应取消上传并清理临时文件
 	Put(ctx context.Context, file io.ReadCloser, dst string, size uint64) error
 
+	//移动文件
+	Move(ctx context.Context, file io.ReadCloser, dst string, size uint64, srcPath string) error
+
 	// 删除一个或多个给定路径的文件，返回删除失败的文件路径列表及错误
 	Delete(ctx context.Context, files []string) ([]string, error)
 

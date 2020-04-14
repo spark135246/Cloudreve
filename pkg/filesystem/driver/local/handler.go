@@ -76,6 +76,38 @@ func (handler Driver) Put(ctx context.Context, file io.ReadCloser, dst string, s
 	return err
 }
 
+// Move 移动文件
+func (handler Driver) Move(ctx context.Context, file io.ReadCloser, dst string, size uint64, srcPath string) error {
+	defer file.Close()
+	dst = util.RelativePath(filepath.FromSlash(dst))
+
+	// 如果目标目录不存在，创建
+	basePath := filepath.Dir(dst)
+	if !util.Exists(basePath) {
+		err := os.MkdirAll(basePath, 0744)
+		if err != nil {
+			util.Log().Warning("无法创建目录，%s", err)
+			return err
+		}
+	}
+
+	// 创建目标文件
+	out, err := os.Create(dst)
+	if err != nil {
+		util.Log().Warning("无法创建文件，%s", err)
+		return err
+	}
+	defer out.Close()
+
+	// 移动
+	err = os.Rename(srcPath, dst)
+	if err != nil {
+		// 复制文件
+		_, err = io.Copy(out, file)
+	}
+	return err
+}
+
 // Delete 删除一个或多个文件，
 // 返回未删除的文件，及遇到的最后一个错误
 func (handler Driver) Delete(ctx context.Context, files []string) ([]string, error) {
