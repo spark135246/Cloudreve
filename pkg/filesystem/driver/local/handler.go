@@ -98,7 +98,7 @@ func (handler Driver) Move(ctx context.Context, file io.ReadCloser, dst string, 
 		return err
 	}
 	defer out.Close()
-
+	util.Log().Info("移动......", srcPath, dst)
 	// 移动
 	err = os.Rename(srcPath, dst)
 	if err != nil {

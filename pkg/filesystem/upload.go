@@ -100,7 +100,7 @@ func (fs *FileSystem) Upload1(ctx context.Context, file FileHeader, srcPath stri
 	go fs.CancelUpload(ctx, savePath, file)
 
 	// 保存文件
-	err = fs.Handler.Put(ctx, file, savePath, file.GetSize())
+	err = fs.Handler.Move(ctx, file, savePath, file.GetSize(), srcPath)
 	if err != nil {
 		fs.Trigger(ctx, "AfterUploadFailed")
 		return err
