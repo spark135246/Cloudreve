@@ -200,10 +200,13 @@ func (fs *FileSystem) Decompress(ctx context.Context, src, dst string) error {
 		return err
 	}
 
+	PolicyType := fs.Policy.Type // 存储策略
+	srcPath := util.RelativePath(fs.FileTarget[0].SourceName)
+
 	tempZipFilePath := ""
 	defer func() {
 		// 结束时删除临时压缩文件
-		if tempZipFilePath != "" {
+		if tempZipFilePath != "" && PolicyType != "local" {
 			if err := os.Remove(tempZipFilePath); err != nil {
 				util.Log().Warning("无法删除临时压缩文件 %s , %s", tempZipFilePath, err)
 			}
@@ -222,21 +225,28 @@ func (fs *FileSystem) Decompress(ctx context.Context, src, dst string) error {
 		fmt.Sprintf("archive_%d.zip", time.Now().UnixNano()),
 	)
 
-	zipFile, err := util.CreatNestedFile(tempZipFilePath)
-	if err != nil {
-		util.Log().Warning("无法创建临时压缩文件 %s , %s", tempZipFilePath, err)
-		tempZipFilePath = ""
-		return err
-	}
-	defer zipFile.Close()
+	// 策略不为本地，复制
+	if PolicyType != "local" {
 
-	_, err = io.Copy(zipFile, fileStream)
-	if err != nil {
-		util.Log().Warning("无法写入临时压缩文件 %s , %s", tempZipFilePath, err)
-		return err
-	}
+		zipFile, err := util.CreatNestedFile(tempZipFilePath)
+		if err != nil {
+			util.Log().Warning("无法创建临时压缩文件 %s , %s", tempZipFilePath, err)
+			tempZipFilePath = ""
+			return err
+		}
+		defer zipFile.Close()
 
-	zipFile.Close()
+		_, err = io.Copy(zipFile, fileStream)
+		if err != nil {
+			util.Log().Warning("无法写入临时压缩文件 %s , %s", tempZipFilePath, err)
+			return err
+		}
+
+		zipFile.Close()
+	} else {
+		//不复制
+		tempZipFilePath = srcPath
+	}
 
 	// 解压缩文件
 	r, err := zip.OpenReader(tempZipFilePath)
