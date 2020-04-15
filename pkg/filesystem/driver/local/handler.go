@@ -104,6 +104,8 @@ func (handler Driver) Move(ctx context.Context, file io.ReadCloser, dst string, 
 	if err != nil {
 		// 复制文件
 		_, err = io.Copy(out, file)
+	} else {
+		util.Log().Info("成功移动......")
 	}
 	return err
 }
