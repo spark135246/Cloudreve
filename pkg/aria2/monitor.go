@@ -4,6 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"strconv"
+	"time"
+
 	model "github.com/HFO4/cloudreve/models"
 	"github.com/HFO4/cloudreve/pkg/aria2/rpc"
 	"github.com/HFO4/cloudreve/pkg/filesystem"
@@ -11,10 +16,6 @@ import (
 	"github.com/HFO4/cloudreve/pkg/filesystem/fsctx"
 	"github.com/HFO4/cloudreve/pkg/task"
 	"github.com/HFO4/cloudreve/pkg/util"
-	"os"
-	"path/filepath"
-	"strconv"
-	"time"
 )
 
 // Monitor 离线下载状态监控
