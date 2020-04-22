@@ -1,7 +1,8 @@
 name: Cloudreve-CI
 
 on:
-  push:
+  watch:
+    types: started
     branches: 
       - master
       
@@ -10,6 +11,7 @@ jobs:
   build:
 
     runs-on: ubuntu-latest
+    if: github.event.repository.owner.id == github.event.sender.id
 
     steps:
     
