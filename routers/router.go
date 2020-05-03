@@ -49,6 +49,8 @@ func InitSlaveRouter() *gin.Engine {
 		v3.GET("thumb/:path", controllers.SlaveThumb)
 		// 删除文件
 		v3.POST("delete", controllers.SlaveDelete)
+		// 列出文件
+		v3.POST("list", controllers.SlaveList)
 	}
 	return r
 }
@@ -274,6 +276,8 @@ func InitMasterRouter() *gin.Engine {
 				middleware.ShareCanPreview(),
 				controllers.ShareThumb,
 			)
+			// 搜索公共分享
+			v3.Group("share").GET("search", controllers.SearchShare)
 		}
 
 		// 需要登录保护的
@@ -363,6 +367,9 @@ func InitMasterRouter() *gin.Engine {
 					file.GET("preview/:id", controllers.AdminGetFile)
 					// 删除
 					file.POST("delete", controllers.AdminDeleteFile)
+					// 列出用户或外部文件系统目录
+					file.GET("folders/:type/:id/*path",
+						controllers.AdminListFolders)
 				}
 
 				share := admin.Group("share")
@@ -506,8 +513,6 @@ func InitMasterRouter() *gin.Engine {
 				share.POST("", controllers.CreateShare)
 				// 列出我的分享
 				share.GET("", controllers.ListShare)
-				// 搜索公共分享
-				share.GET("search", controllers.SearchShare)
 				// 更新分享属性
 				share.PATCH(":id",
 					middleware.ShareAvailable(),
