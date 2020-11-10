@@ -133,12 +133,18 @@ func RemoveFilesWithSoftLinks(files []File) ([]File, error) {
 	// 查询软链接的文件
 	var filesWithSoftLinks []File
 	tx := DB
-	for _, value := range files {
+	for key, value := range files {
+		// 防止参数过多消耗内存,默认999
+		if key > 0 && key%333 == 0 {
+			var filesWithSoftLinks1 []File
+			result := tx.Find(&filesWithSoftLinks1)
+			if result.Error != nil {
+				return nil, result.Error
+			}
+			filesWithSoftLinks = append(filesWithSoftLinks, filesWithSoftLinks1...)
+			tx = DB
+		}
 		tx = tx.Or("source_name = ? and policy_id = ? and id != ?", value.SourceName, value.PolicyID, value.ID)
-	}
-	result := tx.Find(&filesWithSoftLinks)
-	if result.Error != nil {
-		return nil, result.Error
 	}
 
 	// 过滤具有软连接的文件
@@ -167,8 +173,20 @@ func RemoveFilesWithSoftLinks(files []File) ([]File, error) {
 
 // DeleteFileByIDs 根据给定ID批量删除文件记录
 func DeleteFileByIDs(ids []uint) error {
-	result := DB.Where("id in (?)", ids).Unscoped().Delete(&File{})
-	return result.Error
+	// 超出数量切分
+	count := len(ids) / 999
+	for i := 0; i <= count; i++ {
+		var result *gorm.DB
+		if i == count {
+			result = DB.Where("id in (?)", ids[i*999:]).Unscoped().Delete(&File{})
+		} else {
+			result = DB.Where("id in (?)", ids[i*999:(i+1)*999]).Unscoped().Delete(&File{})
+		}
+		if result.Error != nil {
+			return result.Error
+		}
+	}
+	return nil
 }
 
 // GetFilesByParentIDs 根据父目录ID查找文件
