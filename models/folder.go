@@ -29,10 +29,33 @@ func (folder *Folder) Create() (uint, error) {
 	return folder.ID, nil
 }
 
+// Create 创建目录
+func (folder *Folder) CreateTransaction(tx *gorm.DB) (uint, error) {
+	if err := tx.Create(folder).Error; err != nil {
+		util.Log().Warning("无法插入目录记录, %s", err)
+		return 0, err
+	}
+	return folder.ID, nil
+}
+
 // GetChild 返回folder下名为name的子目录，不存在则返回错误
 func (folder *Folder) GetChild(name string) (*Folder, error) {
 	var resFolder Folder
 	err := DB.
+		Where("parent_id = ? AND owner_id = ? AND name = ?", folder.ID, folder.OwnerID, name).
+		First(&resFolder).Error
+
+	// 将子目录的路径传递下去
+	if err == nil {
+		resFolder.Position = path.Join(folder.Position, folder.Name)
+	}
+	return &resFolder, err
+}
+
+// GetChild 返回folder下名为name的子目录，不存在则返回错误
+func (folder *Folder) GetChildTransaction(name string, tx *gorm.DB) (*Folder, error) {
+	var resFolder Folder
+	err := tx.
 		Where("parent_id = ? AND owner_id = ? AND name = ?", folder.ID, folder.OwnerID, name).
 		First(&resFolder).Error
 

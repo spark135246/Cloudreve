@@ -3,6 +3,7 @@ package filesystem
 import (
 	model "github.com/HFO4/cloudreve/models"
 	"github.com/HFO4/cloudreve/pkg/util"
+	"github.com/jinzhu/gorm"
 	"path"
 )
 
@@ -51,6 +52,44 @@ func (fs *FileSystem) IsPathExist(path string) (bool, *model.Folder) {
 	return true, currentFolder
 }
 
+func (fs *FileSystem) IsPathExistTransaction(path string, tx *gorm.DB) (bool, *model.Folder) {
+	pathList := util.SplitPath(path)
+	if len(pathList) == 0 {
+		return false, nil
+	}
+
+	// 递归步入目录
+	// TODO:测试新增
+	var currentFolder *model.Folder
+
+	// 如果已设定跟目录对象，则从给定目录向下遍历
+	if fs.Root != nil {
+		currentFolder = fs.Root
+	}
+
+	for _, folderName := range pathList {
+		var err error
+
+		// 根目录
+		if folderName == "/" {
+			if currentFolder != nil {
+				continue
+			}
+			currentFolder, err = fs.User.RootTransaction(tx)
+			if err != nil {
+				return false, nil
+			}
+		} else {
+			currentFolder, err = currentFolder.GetChildTransaction(folderName, tx)
+			if err != nil {
+				return false, nil
+			}
+		}
+	}
+
+	return true, currentFolder
+}
+
 // IsFileExist 返回给定路径的文件是否存在
 func (fs *FileSystem) IsFileExist(fullPath string) (bool, *model.File) {
 	basePath := path.Dir(fullPath)
@@ -70,5 +109,11 @@ func (fs *FileSystem) IsFileExist(fullPath string) (bool, *model.File) {
 // IsChildFileExist 确定folder目录下是否有名为name的文件
 func (fs *FileSystem) IsChildFileExist(folder *model.Folder, name string) (bool, *model.File) {
 	file, err := folder.GetChildFile(name)
+	return err == nil, file
+}
+
+// IsChildFileExist 确定folder目录下是否有名为name的文件
+func (fs *FileSystem) IsChildFileExistTransaction(folder *model.Folder, name string, tx *gorm.DB) (bool, *model.File) {
+	file, err := folder.GetChildFileTransaction(name, tx)
 	return err == nil, file
 }

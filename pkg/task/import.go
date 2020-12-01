@@ -78,6 +78,17 @@ func (job *ImportTask) GetError() *JobError {
 func (job *ImportTask) Do() {
 	ctx := context.Background()
 
+	// 事务
+	tx := model.DB.Begin()
+	defer func() {
+		if tx.Error != nil {
+			tx.Rollback()
+			job.SetErrorMsg("导入文件错误", tx.Error)
+		} else {
+			tx.Commit()
+		}
+	}()
+
 	// 查找存储策略
 	policy, err := model.GetPolicyByID(job.TaskProps.PolicyID)
 	if err != nil {
@@ -92,12 +103,16 @@ func (job *ImportTask) Do() {
 		job.SetErrorMsg(err.Error(), nil)
 		return
 	}
+	fs.Tx = tx
 	defer fs.Recycle()
+	defer func() {
+		fs.Tx = nil
+	}()
 
 	// 注册钩子
 	fs.Use("BeforeAddFile", filesystem.HookValidateFile)
-	fs.Use("BeforeAddFile", filesystem.HookValidateCapacity)
-	fs.Use("AfterValidateFailed", filesystem.HookGiveBackCapacity)
+	fs.Use("BeforeAddFile", filesystem.HookValidateCapacityTransaction)
+	fs.Use("AfterValidateFailed", filesystem.HookGiveBackCapacityTransaction)
 
 	// 列取目录、对象
 	job.TaskModel.SetProgress(ListingProgress)
@@ -119,7 +134,7 @@ func (job *ImportTask) Do() {
 		if object.IsDir {
 			// 创建目录
 			virtualPath := path.Join(job.TaskProps.Dst, object.RelativePath)
-			folder, err := fs.CreateDirectory(coxIgnoreConflict, virtualPath)
+			folder, err := fs.CreateDirectoryTransaction(coxIgnoreConflict, virtualPath, tx)
 			if err != nil {
 				util.Log().Warning("导入任务无法创建用户目录[%s], %s", virtualPath, err)
 			} else if folder.ID > 0 {
@@ -146,11 +161,11 @@ func (job *ImportTask) Do() {
 			if parent, ok := pathCache[virtualPath]; ok {
 				parentFolder = parent
 			} else {
-				exist, folder := fs.IsPathExist(virtualPath)
+				exist, folder := fs.IsPathExistTransaction(virtualPath, tx)
 				if exist {
 					parentFolder = folder
 				} else {
-					folder, err := fs.CreateDirectory(context.Background(), virtualPath)
+					folder, err := fs.CreateDirectoryTransaction(context.Background(), virtualPath, tx)
 					if err != nil {
 						util.Log().Warning("导入任务无法创建用户目录[%s], %s",
 							virtualPath, err)
@@ -161,7 +176,7 @@ func (job *ImportTask) Do() {
 			}
 
 			// 插入文件记录
-			file, err := fs.AddFile(addFileCtx, parentFolder)
+			file, err := fs.AddFileTransaction(addFileCtx, parentFolder, tx)
 			if err != nil {
 				util.Log().Warning("导入任务无法创插入文件[%s], %s",
 					object.RelativePath, err)

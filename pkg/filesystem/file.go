@@ -8,6 +8,7 @@ import (
 	"github.com/HFO4/cloudreve/pkg/filesystem/response"
 	"github.com/HFO4/cloudreve/pkg/serializer"
 	"github.com/HFO4/cloudreve/pkg/util"
+	"github.com/jinzhu/gorm"
 	"github.com/juju/ratelimit"
 	"io"
 )
@@ -69,6 +70,45 @@ func (fs *FileSystem) AddFile(ctx context.Context, parent *model.Folder) (*model
 	}
 
 	_, err = newFile.Create()
+
+	if err != nil {
+		if err := fs.Trigger(ctx, "AfterValidateFailed"); err != nil {
+			util.Log().Debug("AfterValidateFailed 钩子执行失败，%s", err)
+		}
+		return nil, ErrFileExisted.WithError(err)
+	}
+
+	return &newFile, nil
+}
+
+// AddFile 新增文件记录
+func (fs *FileSystem) AddFileTransaction(ctx context.Context, parent *model.Folder, tx *gorm.DB) (*model.File, error) {
+	// 添加文件记录前的钩子
+	err := fs.Trigger(ctx, "BeforeAddFile")
+	if err != nil {
+		if err := fs.Trigger(ctx, "BeforeAddFileFailed"); err != nil {
+			util.Log().Debug("BeforeAddFileFailed 钩子执行失败，%s", err)
+		}
+		return nil, err
+	}
+
+	file := ctx.Value(fsctx.FileHeaderCtx).(FileHeader)
+	filePath := ctx.Value(fsctx.SavePathCtx).(string)
+
+	newFile := model.File{
+		Name:       file.GetFileName(),
+		SourceName: filePath,
+		UserID:     fs.User.ID,
+		Size:       file.GetSize(),
+		FolderID:   parent.ID,
+		PolicyID:   fs.User.Policy.ID,
+	}
+
+	if fs.User.Policy.IsThumbExist(file.GetFileName()) {
+		newFile.PicInfo = "1,1"
+	}
+
+	_, err = newFile.CreateTransaction(tx)
 
 	if err != nil {
 		if err := fs.Trigger(ctx, "AfterValidateFailed"); err != nil {

@@ -3,6 +3,7 @@ package filesystem
 import (
 	"context"
 	"github.com/HFO4/cloudreve/pkg/util"
+	"github.com/jinzhu/gorm"
 	"path/filepath"
 	"strings"
 )
@@ -53,6 +54,11 @@ func (fs *FileSystem) ValidateFileSize(ctx context.Context, size uint64) bool {
 // ValidateCapacity 验证并扣除用户容量
 func (fs *FileSystem) ValidateCapacity(ctx context.Context, size uint64) bool {
 	return fs.User.IncreaseStorage(size)
+}
+
+// ValidateCapacity 验证并扣除用户容量
+func (fs *FileSystem) ValidateCapacityTransaction(ctx context.Context, size uint64, tx *gorm.DB) bool {
+	return fs.User.IncreaseStorageTransaction(size, tx)
 }
 
 // ValidateExtension 验证文件扩展名

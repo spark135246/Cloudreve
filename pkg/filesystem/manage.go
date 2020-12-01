@@ -8,6 +8,7 @@ import (
 	"github.com/HFO4/cloudreve/pkg/hashid"
 	"github.com/HFO4/cloudreve/pkg/serializer"
 	"github.com/HFO4/cloudreve/pkg/util"
+	"github.com/jinzhu/gorm"
 	"path"
 	"strings"
 )
@@ -424,6 +425,61 @@ func (fs *FileSystem) CreateDirectory(ctx context.Context, fullPath string) (*mo
 		OwnerID:  fs.User.ID,
 	}
 	_, err := newFolder.Create()
+
+	if err != nil {
+		if _, ok := ctx.Value(fsctx.IgnoreConflictCtx).(bool); !ok {
+			return nil, ErrFolderExisted
+		}
+
+	}
+	return &newFolder, nil
+}
+
+// CreateDirectoryTransaction 根据给定的完整创建目录，支持递归创建
+func (fs *FileSystem) CreateDirectoryTransaction(ctx context.Context, fullPath string, tx *gorm.DB) (*model.Folder, error) {
+	if fullPath == "/" || fullPath == "." || fullPath == "" {
+		return nil, ErrRootProtected
+	}
+
+	// 获取要创建目录的父路径和目录名
+	fullPath = path.Clean(fullPath)
+	base := path.Dir(fullPath)
+	dir := path.Base(fullPath)
+
+	// 去掉结尾空格
+	dir = strings.TrimRight(dir, " ")
+
+	// 检查目录名是否合法
+	if !fs.ValidateLegalName(ctx, dir) {
+		return nil, ErrIllegalObjectName
+	}
+
+	// 父目录是否存在
+	isExist, parent := fs.IsPathExistTransaction(base, tx)
+	if !isExist {
+		// 递归创建父目录
+		if _, ok := ctx.Value(fsctx.IgnoreConflictCtx).(bool); !ok {
+			ctx = context.WithValue(ctx, fsctx.IgnoreConflictCtx, true)
+		}
+		newParent, err := fs.CreateDirectoryTransaction(ctx, base, tx)
+		if err != nil {
+			return nil, err
+		}
+		parent = newParent
+	}
+
+	// 是否有同名文件
+	if ok, _ := fs.IsChildFileExistTransaction(parent, dir, tx); ok {
+		return nil, ErrFileExisted
+	}
+
+	// 创建目录
+	newFolder := model.Folder{
+		Name:     dir,
+		ParentID: &parent.ID,
+		OwnerID:  fs.User.ID,
+	}
+	_, err := newFolder.CreateTransaction(tx)
 
 	if err != nil {
 		if _, ok := ctx.Value(fsctx.IgnoreConflictCtx).(bool); !ok {

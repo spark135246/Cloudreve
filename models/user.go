@@ -58,6 +58,13 @@ func (user *User) Root() (*Folder, error) {
 	return &folder, err
 }
 
+// Root 获取用户的根目录
+func (user *User) RootTransaction(tx *gorm.DB) (*Folder, error) {
+	var folder Folder
+	err := tx.Where("parent_id is NULL AND owner_id = ?", user.ID).First(&folder).Error
+	return &folder, err
+}
+
 // DeductionStorage 减少用户已用容量
 func (user *User) DeductionStorage(size uint64) bool {
 	if size == 0 {
@@ -75,6 +82,23 @@ func (user *User) DeductionStorage(size uint64) bool {
 	return false
 }
 
+// DeductionStorage 减少用户已用容量
+func (user *User) DeductionStorageTransaction(size uint64,tx *gorm.DB) bool {
+	if size == 0 {
+		return true
+	}
+	if size <= user.Storage {
+		user.Storage -= size
+		tx.Model(user).Update("storage", gorm.Expr("storage - ?", size))
+		return true
+	}
+	// 如果要减少的容量超出已用容量，则设为零
+	user.Storage = 0
+	tx.Model(user).Update("storage", 0)
+
+	return false
+}
+
 // IncreaseStorage 检查并增加用户已用容量
 func (user *User) IncreaseStorage(size uint64) bool {
 	if size == 0 {
@@ -83,6 +107,19 @@ func (user *User) IncreaseStorage(size uint64) bool {
 	if size <= user.GetRemainingCapacity() {
 		user.Storage += size
 		DB.Model(user).Update("storage", gorm.Expr("storage + ?", size))
+		return true
+	}
+	return false
+}
+
+// IncreaseStorage 检查并增加用户已用容量
+func (user *User) IncreaseStorageTransaction(size uint64,tx *gorm.DB) bool {
+	if size == 0 {
+		return true
+	}
+	if size <= user.GetRemainingCapacity() {
+		user.Storage += size
+		tx.Model(user).Update("storage", gorm.Expr("storage + ?", size))
 		return true
 	}
 	return false

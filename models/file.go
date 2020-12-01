@@ -41,10 +41,30 @@ func (file *File) Create() (uint, error) {
 	return file.ID, nil
 }
 
+// Create 创建文件记录
+func (file *File) CreateTransaction(tx *gorm.DB) (uint, error) {
+	if err := tx.Create(file).Error; err != nil {
+		util.Log().Warning("无法插入文件记录, %s", err)
+		return 0, err
+	}
+	return file.ID, nil
+}
+
 // GetChildFile 查找目录下名为name的子文件
 func (folder *Folder) GetChildFile(name string) (*File, error) {
 	var file File
 	result := DB.Where("folder_id = ? AND name = ?", folder.ID, name).Find(&file)
+
+	if result.Error == nil {
+		file.Position = path.Join(folder.Position, folder.Name)
+	}
+	return &file, result.Error
+}
+
+// GetChildFile 查找目录下名为name的子文件
+func (folder *Folder) GetChildFileTransaction(name string, tx *gorm.DB) (*File, error) {
+	var file File
+	result := tx.Where("folder_id = ? AND name = ?", folder.ID, name).Find(&file)
 
 	if result.Error == nil {
 		file.Position = path.Join(folder.Position, folder.Name)

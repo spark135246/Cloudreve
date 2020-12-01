@@ -17,6 +17,7 @@ import (
 	"github.com/HFO4/cloudreve/pkg/request"
 	"github.com/HFO4/cloudreve/pkg/serializer"
 	"github.com/gin-gonic/gin"
+	"github.com/jinzhu/gorm"
 	cossdk "github.com/tencentyun/cos-go-sdk-v5"
 	"io"
 	"net/http"
@@ -88,6 +89,8 @@ type FileSystem struct {
 	Root *model.Folder
 	// 互斥锁
 	Lock sync.Mutex
+	// 当前事务
+	Tx *gorm.DB
 
 	/*
 	   钩子函数

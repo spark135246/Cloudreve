@@ -131,6 +131,19 @@ func HookValidateCapacity(ctx context.Context, fs *FileSystem) error {
 	return nil
 }
 
+// HookValidateCapacity 验证并扣除用户容量，包含数据库操作
+func HookValidateCapacityTransaction(ctx context.Context, fs *FileSystem) error {
+	file := ctx.Value(fsctx.FileHeaderCtx).(FileHeader)
+	if fs.Tx == nil {
+		return ErrInsufficientCapacity
+	}
+	// 验证并扣除容量
+	if !fs.ValidateCapacityTransaction(ctx, file.GetSize(), fs.Tx) {
+		return ErrInsufficientCapacity
+	}
+	return nil
+}
+
 // HookValidateCapacityWithoutIncrease 验证用户容量，不扣除
 func HookValidateCapacityWithoutIncrease(ctx context.Context, fs *FileSystem) error {
 	file := ctx.Value(fsctx.FileHeaderCtx).(FileHeader)
@@ -191,6 +204,21 @@ func HookGiveBackCapacity(ctx context.Context, fs *FileSystem) error {
 
 	// 归还用户容量
 	if !fs.User.DeductionStorage(file.GetSize()) {
+		return errors.New("无法继续降低用户已用存储")
+	}
+	return nil
+}
+
+// HookGiveBackCapacity 归还用户容量
+func HookGiveBackCapacityTransaction(ctx context.Context, fs *FileSystem) error {
+	file := ctx.Value(fsctx.FileHeaderCtx).(FileHeader)
+
+	if fs.Tx == nil {
+		return errors.New("无法继续降低用户已用存储")
+	}
+
+	// 归还用户容量
+	if !fs.User.DeductionStorageTransaction(file.GetSize(), fs.Tx) {
 		return errors.New("无法继续降低用户已用存储")
 	}
 	return nil
