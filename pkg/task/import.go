@@ -187,7 +187,7 @@ func (job *ImportTask) Do() {
 			} else {
 				// 生成缩略图
 				if policy.Type == "local" {
-					fs.GenerateThumbnail(ctx, file)
+					fs.GenerateThumbnailTransaction(ctx, file, tx)
 				}
 			}
 

@@ -226,6 +226,11 @@ func (file *File) UpdatePicInfo(value string) error {
 	return DB.Model(&file).Update("pic_info", value).Error
 }
 
+// UpdatePicInfo 更新文件的图像信息
+func (file *File) UpdatePicInfoTransaction(value string, tx *gorm.DB) error {
+	return tx.Model(&file).Update("pic_info", value).Error
+}
+
 // UpdateSize 更新文件的大小信息
 func (file *File) UpdateSize(value uint64) error {
 	return DB.Model(&file).Update("size", value).Error
