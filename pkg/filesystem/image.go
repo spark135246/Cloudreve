@@ -128,11 +128,7 @@ func (fs *FileSystem) GenerateThumbnailTransaction(ctx context.Context, file *mo
 	// 生成缩略图
 	image.GetThumb(fs.GenerateThumbnailSize(w, h))
 	// 保存到文件
-	err = image.Save(util.RelativePath(file.SourceName + conf.ThumbConfig.FileSuffix))
-	if err != nil {
-		util.Log().Warning("无法保存缩略图：%s", err)
-		return
-	}
+	go image.Save(util.RelativePath(file.SourceName + conf.ThumbConfig.FileSuffix))
 
 	// 更新文件的图像信息
 	if file.Model.ID > 0 {

@@ -9,6 +9,7 @@ import (
 	"github.com/HFO4/cloudreve/pkg/filesystem/fsctx"
 	"github.com/HFO4/cloudreve/pkg/util"
 	"path"
+	"sync"
 )
 
 // ImportTask 导入务
@@ -143,6 +144,9 @@ func (job *ImportTask) Do() {
 		}
 	}
 
+	// 控制并发
+	wg := sync.WaitGroup{}
+
 	// 插入文件记录到用户文件系统
 	for _, object := range objects {
 		if !object.IsDir {
@@ -185,14 +189,19 @@ func (job *ImportTask) Do() {
 					return
 				}
 			} else {
-				// 生成缩略图
-				if policy.Type == "local" {
-					fs.GenerateThumbnailTransaction(ctx, file, tx)
+				// 异步生成缩略图
+				if policy.IsThumbGenerateNeeded() {
+					wg.Add(1)
+					go func() {
+						fs.GenerateThumbnailTransaction(ctx, file, tx)
+						wg.Done()
+					}()
 				}
 			}
 
 		}
 	}
+	wg.Wait() // 等待数据库插入结束
 }
 
 // NewImportTask 新建导入任务
