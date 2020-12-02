@@ -89,7 +89,18 @@ func (service *ListFolderService) List(c *gin.Context) serializer.Response {
 
 // Delete 删除文件
 func (service *FileBatchService) Delete(c *gin.Context) serializer.Response {
-	files, err := model.GetFilesByIDs(service.ID, 0)
+	// 事务
+	tx := model.DB.Begin()
+	defer func() {
+		if tx.Error != nil {
+			tx.Rollback()
+			serializer.DBErr("无法列出待删除文件", tx.Error)
+		} else {
+			tx.Commit()
+		}
+	}()
+
+	files, err := model.GetFilesByIDsTransaction(service.ID, 0, tx)
 	if err != nil {
 		return serializer.DBErr("无法列出待删除文件", err)
 	}
@@ -106,7 +117,7 @@ func (service *FileBatchService) Delete(c *gin.Context) serializer.Response {
 	// 异步执行删除
 	go func(files map[uint][]model.File) {
 		for uid, file := range files {
-			user, err := model.GetUserByID(uid)
+			user, err := model.GetUserByIDTransaction(uid, tx)
 			if err != nil {
 				continue
 			}
@@ -124,7 +135,7 @@ func (service *FileBatchService) Delete(c *gin.Context) serializer.Response {
 			}
 
 			// 执行删除
-			fs.Delete(context.Background(), []uint{}, ids, service.Force)
+			fs.DeleteTransaction(context.Background(), []uint{}, ids, service.Force, tx)
 			fs.Recycle()
 		}
 	}(userFile)

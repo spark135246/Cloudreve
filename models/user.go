@@ -83,7 +83,7 @@ func (user *User) DeductionStorage(size uint64) bool {
 }
 
 // DeductionStorage 减少用户已用容量
-func (user *User) DeductionStorageTransaction(size uint64,tx *gorm.DB) bool {
+func (user *User) DeductionStorageTransaction(size uint64, tx *gorm.DB) bool {
 	if size == 0 {
 		return true
 	}
@@ -113,7 +113,7 @@ func (user *User) IncreaseStorage(size uint64) bool {
 }
 
 // IncreaseStorage 检查并增加用户已用容量
-func (user *User) IncreaseStorageTransaction(size uint64,tx *gorm.DB) bool {
+func (user *User) IncreaseStorageTransaction(size uint64, tx *gorm.DB) bool {
 	if size == 0 {
 		return true
 	}
@@ -156,6 +156,13 @@ func (user *User) GetPolicyID(prefer uint) uint {
 func GetUserByID(ID interface{}) (User, error) {
 	var user User
 	result := DB.Set("gorm:auto_preload", true).First(&user, ID)
+	return user, result.Error
+}
+
+// GetUserByID 用ID获取用户
+func GetUserByIDTransaction(ID interface{}, tx *gorm.DB) (User, error) {
+	var user User
+	result := tx.Set("gorm:auto_preload", true).First(&user, ID)
 	return user, result.Error
 }
 

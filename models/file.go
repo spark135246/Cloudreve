@@ -98,6 +98,34 @@ func GetFilesByIDs(ids []uint, uid uint) ([]File, error) {
 	return files, result.Error
 }
 
+// GetFilesByIDs 根据文件ID批量获取文件,
+// UID为0表示忽略用户，只根据文件ID检索
+func GetFilesByIDsTransaction(ids []uint, uid uint, tx *gorm.DB) ([]File, error) {
+	var files []File
+	var result *gorm.DB
+	var file File
+
+	// 循环寻找
+	if uid == 0 {
+		for id := range ids {
+			result = tx.Where("id = ?", id).First(&file)
+		}
+		if result != nil && result.Error != nil {
+			return files, result.Error
+		}
+		files = append(files, file)
+	} else {
+		for id := range ids {
+			result = tx.Where("id = ? AND user_id = ?", id, uid).First(&file)
+		}
+		if result != nil && result.Error != nil {
+			return files, result.Error
+		}
+		files = append(files, file)
+	}
+	return files, nil
+}
+
 // GetFilesByKeywords 根据关键字搜索文件,
 // UID为0表示忽略用户，只根据文件ID检索
 func GetFilesByKeywords(uid uint, keywords ...interface{}) ([]File, error) {
@@ -134,6 +162,20 @@ func GetChildFilesOfFolders(folders *[]Folder) ([]File, error) {
 	// 检索文件
 	var files []File
 	result := DB.Where("folder_id in (?)", folderIDs).Find(&files)
+	return files, result.Error
+}
+
+// GetChildFilesOfFolders 批量检索目录子文件
+func GetChildFilesOfFoldersTransaction(folders *[]Folder, tx *gorm.DB) ([]File, error) {
+	// 将所有待删除目录ID抽离，以便检索文件
+	folderIDs := make([]uint, 0, len(*folders))
+	for _, value := range *folders {
+		folderIDs = append(folderIDs, value.ID)
+	}
+
+	// 检索文件
+	var files []File
+	result := tx.Where("folder_id in (?)", folderIDs).Find(&files)
 	return files, result.Error
 }
 
@@ -191,6 +233,47 @@ func RemoveFilesWithSoftLinks(files []File) ([]File, error) {
 
 }
 
+// RemoveFilesWithSoftLinks 去除给定的文件列表中有软链接的文件
+func RemoveFilesWithSoftLinksTransaction(files []File, tx *gorm.DB) ([]File, error) {
+	// 结果值
+	filteredFiles := make([]File, 0)
+
+	// 查询软链接的文件
+	var filesWithSoftLinks []File
+
+	for _, value := range files {
+		var files []File
+		result := tx.Where("source_name = ? and policy_id = ? and id != ?", value.SourceName, value.PolicyID, value.ID).Find(&files)
+		if result.Error != nil {
+			return nil, result.Error
+		}
+		filesWithSoftLinks = append(filesWithSoftLinks, files...)
+	}
+
+	// 过滤具有软连接的文件
+	// TODO: 优化复杂度
+	if len(filesWithSoftLinks) == 0 {
+		filteredFiles = files
+	} else {
+		for i := 0; i < len(files); i++ {
+			finder := false
+			for _, value := range filesWithSoftLinks {
+				if value.PolicyID == files[i].PolicyID && value.SourceName == files[i].SourceName {
+					finder = true
+					break
+				}
+			}
+			if !finder {
+				filteredFiles = append(filteredFiles, files[i])
+			}
+
+		}
+	}
+
+	return filteredFiles, nil
+
+}
+
 // DeleteFileByIDs 根据给定ID批量删除文件记录
 func DeleteFileByIDs(ids []uint) error {
 	// 超出数量切分
@@ -202,6 +285,17 @@ func DeleteFileByIDs(ids []uint) error {
 		} else {
 			result = DB.Where("id in (?)", ids[i*999:(i+1)*999]).Unscoped().Delete(&File{})
 		}
+		if result.Error != nil {
+			return result.Error
+		}
+	}
+	return nil
+}
+
+// DeleteFileByIDs 根据给定ID批量删除文件记录
+func DeleteFileByIDsTransaction(ids []uint, tx *gorm.DB) error {
+	for id := range ids {
+		result := tx.Where("id = ?", id).Unscoped().Delete(&File{})
 		if result.Error != nil {
 			return result.Error
 		}

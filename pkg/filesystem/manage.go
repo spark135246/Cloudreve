@@ -232,6 +232,106 @@ func (fs *FileSystem) Delete(ctx context.Context, dirs, files []uint, force bool
 	return nil
 }
 
+// Delete 递归删除对象, force 为 true 时强制删除文件记录，忽略物理删除是否成功
+func (fs *FileSystem) DeleteTransaction(ctx context.Context, dirs, files []uint, force bool, tx *gorm.DB) error {
+	// 已删除的总容量,map用于去重
+	var deletedStorage = make(map[uint]uint64)
+	var totalStorage = make(map[uint]uint64)
+	// 已删除的文件ID
+	var deletedFileIDs = make([]uint, 0, len(fs.FileTarget))
+	// 删除失败的文件的父目录ID
+
+	// 所有文件的ID
+	var allFileIDs = make([]uint, 0, len(fs.FileTarget))
+
+	// 列出要删除的目录
+	if len(dirs) > 0 {
+		err := fs.ListDeleteDirsTransaction(ctx, dirs, tx)
+		if err != nil {
+			return err
+		}
+	}
+
+	// 列出要删除的文件
+	if len(files) > 0 {
+		err := fs.ListDeleteFilesTransaction(ctx, files, tx)
+		if err != nil {
+			return err
+		}
+	}
+
+	// 去除待删除文件中包含软连接的部分
+	filesToBeDelete, err := model.RemoveFilesWithSoftLinksTransaction(fs.FileTarget, tx)
+	if err != nil {
+		return ErrDBListObjects.WithError(err)
+	}
+
+	// 根据存储策略将文件分组
+	policyGroup := fs.GroupFileByPolicy(ctx, filesToBeDelete)
+
+	// 按照存储策略分组删除对象
+	failed := fs.deleteGroupedFile(ctx, policyGroup)
+
+	// 整理删除结果
+	for i := 0; i < len(fs.FileTarget); i++ {
+		if !util.ContainsString(failed[fs.FileTarget[i].PolicyID], fs.FileTarget[i].SourceName) {
+			// 已成功删除的文件
+			deletedFileIDs = append(deletedFileIDs, fs.FileTarget[i].ID)
+			deletedStorage[fs.FileTarget[i].ID] = fs.FileTarget[i].Size
+		}
+		// 全部文件
+		totalStorage[fs.FileTarget[i].ID] = fs.FileTarget[i].Size
+		allFileIDs = append(allFileIDs, fs.FileTarget[i].ID)
+	}
+
+	// 如果强制删除，则将全部文件视为删除成功
+	if force {
+		deletedFileIDs = allFileIDs
+		deletedStorage = totalStorage
+	}
+
+	// 删除文件记录
+	err = model.DeleteFileByIDsTransaction(deletedFileIDs, tx)
+	if err != nil {
+		return ErrDBDeleteObjects.WithError(err)
+	}
+
+	// 删除文件记录对应的分享记录
+	model.DeleteShareBySourceIDsTransaction(deletedFileIDs, false, tx)
+
+	// 归还容量
+	var total uint64
+	for _, value := range deletedStorage {
+		total += value
+	}
+	fs.User.DeductionStorageTransaction(total, tx)
+
+	// 如果文件全部删除成功，继续删除目录
+	if len(deletedFileIDs) == len(allFileIDs) {
+		var allFolderIDs = make([]uint, 0, len(fs.DirTarget))
+		for _, value := range fs.DirTarget {
+			allFolderIDs = append(allFolderIDs, value.ID)
+		}
+		err = model.DeleteFolderByIDs(allFolderIDs)
+		if err != nil {
+			return ErrDBDeleteObjects.WithError(err)
+		}
+
+		// 删除目录记录对应的分享记录
+		model.DeleteShareBySourceIDsTransaction(allFolderIDs, true, tx)
+	}
+
+	if notDeleted := len(fs.FileTarget) - len(deletedFileIDs); notDeleted > 0 {
+		return serializer.NewError(
+			serializer.CodeNotFullySuccess,
+			fmt.Sprintf("有 %d 个文件未能成功删除", notDeleted),
+			nil,
+		)
+	}
+
+	return nil
+}
+
 // ListDeleteDirs 递归列出要删除目录，及目录下所有文件
 func (fs *FileSystem) ListDeleteDirs(ctx context.Context, ids []uint) error {
 	// 列出所有递归子目录
@@ -251,9 +351,38 @@ func (fs *FileSystem) ListDeleteDirs(ctx context.Context, ids []uint) error {
 	return nil
 }
 
+// ListDeleteDirs 递归列出要删除目录，及目录下所有文件
+func (fs *FileSystem) ListDeleteDirsTransaction(ctx context.Context, ids []uint, tx *gorm.DB) error {
+	// 列出所有递归子目录
+	folders, err := model.GetRecursiveChildFolderTransaction(ids, fs.User.ID, true, tx)
+	if err != nil {
+		return ErrDBListObjects.WithError(err)
+	}
+	fs.SetTargetDir(&folders)
+
+	// 检索目录下的子文件
+	files, err := model.GetChildFilesOfFoldersTransaction(&folders, tx)
+	if err != nil {
+		return ErrDBListObjects.WithError(err)
+	}
+	fs.SetTargetFile(&files)
+
+	return nil
+}
+
 // ListDeleteFiles 根据给定的路径列出要删除的文件
 func (fs *FileSystem) ListDeleteFiles(ctx context.Context, ids []uint) error {
 	files, err := model.GetFilesByIDs(ids, fs.User.ID)
+	if err != nil {
+		return ErrDBListObjects.WithError(err)
+	}
+	fs.SetTargetFile(&files)
+	return nil
+}
+
+// ListDeleteFiles 根据给定的路径列出要删除的文件
+func (fs *FileSystem) ListDeleteFilesTransaction(ctx context.Context, ids []uint, tx *gorm.DB) error {
+	files, err := model.GetFilesByIDsTransaction(ids, fs.User.ID, tx)
 	if err != nil {
 		return ErrDBListObjects.WithError(err)
 	}

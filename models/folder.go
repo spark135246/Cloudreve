@@ -127,10 +127,77 @@ func GetRecursiveChildFolder(dirs []uint, uid uint, includeSelf bool) ([]Folder,
 	return folders, err
 }
 
+// GetRecursiveChildFolder 查找所有递归子目录，包括自身
+func GetRecursiveChildFolderTransaction(dirs []uint, uid uint, includeSelf bool, tx *gorm.DB) ([]Folder, error) {
+	folders := make([]Folder, 0, len(dirs))
+	var err error
+
+	var parFolders []Folder
+	for dir := range dirs {
+		var folder Folder
+		result := tx.Where("owner_id = ? and id = ?", uid, dir).First(&folder)
+		if result.Error != nil {
+			return folders, err
+		}
+		parFolders = append(parFolders, folder)
+	}
+
+	// 整理父目录的ID
+	var parentIDs = make([]uint, 0, len(parFolders))
+	for _, folder := range parFolders {
+		parentIDs = append(parentIDs, folder.ID)
+	}
+
+	if includeSelf {
+		// 合并至最终结果
+		folders = append(folders, parFolders...)
+	}
+	parFolders = []Folder{}
+
+	// 递归查询子目录,最大递归65535次
+	for i := 0; i < 65535; i++ {
+
+		for parentID := range parentIDs {
+			var folderResult []Folder
+			tx.Where("owner_id = ? and parent_id = ?", uid, parentID).Find(&folderResult)
+			parFolders = append(parFolders, folderResult...)
+		}
+
+		// 查询结束条件
+		if len(parFolders) == 0 {
+			break
+		}
+
+		// 整理父目录的ID
+		parentIDs = make([]uint, 0, len(parFolders))
+		for _, folder := range parFolders {
+			parentIDs = append(parentIDs, folder.ID)
+		}
+
+		// 合并至最终结果
+		folders = append(folders, parFolders...)
+		parFolders = []Folder{}
+
+	}
+
+	return folders, err
+}
+
 // DeleteFolderByIDs 根据给定ID批量删除目录记录
 func DeleteFolderByIDs(ids []uint) error {
 	result := DB.Where("id in (?)", ids).Unscoped().Delete(&Folder{})
 	return result.Error
+}
+
+// DeleteFolderByIDs 根据给定ID批量删除目录记录
+func DeleteFolderByIDsTransaction(ids []uint, tx *gorm.DB) error {
+	for id := range ids {
+		result := tx.Where("id = ?", id).Unscoped().Delete(&Folder{})
+		if result.Error != nil {
+			return result.Error
+		}
+	}
+	return nil
 }
 
 // GetFoldersByIDs 根据ID和用户查找所有目录
