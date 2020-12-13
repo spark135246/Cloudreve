@@ -355,3 +355,53 @@ func GenericAfterUpload(ctx context.Context, fs *FileSystem) error {
 
 	return nil
 }
+
+// GenericAfterUploadTransaction 文件上传完成后，包含数据库操作
+func GenericAfterUploadTransaction(ctx context.Context, fs *FileSystem) error {
+	// 事务
+	if fs.Tx == nil {
+		return ErrInsertFileRecord
+	}
+	tx := fs.Tx
+
+	// 文件存放的虚拟路径
+	virtualPath := ctx.Value(fsctx.FileHeaderCtx).(FileHeader).GetVirtualPath()
+
+	// 检查路径是否存在，不存在就创建
+	isExist, folder := fs.IsPathExistTransaction(virtualPath, tx)
+	if !isExist {
+		newFolder, err := fs.CreateDirectoryTransaction(ctx, virtualPath, tx)
+		if err != nil {
+			return err
+		}
+		folder = newFolder
+	}
+
+	// 检查文件是否存在
+	if ok, _ := fs.IsChildFileExistTransaction(
+		folder,
+		ctx.Value(fsctx.FileHeaderCtx).(FileHeader).GetFileName(),
+		tx,
+	)
+		ok {
+		return ErrFileExisted
+	}
+
+	// 向数据库中插入记录
+	file, err := fs.AddFileTransaction(ctx, folder, tx)
+	if err != nil {
+		return ErrInsertFileRecord
+	}
+	fs.SetTargetFile(&[]model.File{*file})
+
+	// 异步尝试生成缩略图
+	if fs.User.Policy.IsThumbGenerateNeeded() {
+		fs.recycleLock.Lock()
+		go func() {
+			defer fs.recycleLock.Unlock()
+			fs.GenerateThumbnailTransaction(ctx, file, tx)
+		}()
+	}
+
+	return nil
+}

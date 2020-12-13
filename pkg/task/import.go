@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"path"
-
 	"sync"
 
 	model "github.com/cloudreve/Cloudreve/v3/models"
@@ -146,7 +145,8 @@ func (job *ImportTask) Do() {
 		}
 	}
 
-	// 控制并发
+	// 控制并发5
+	sem := make(chan bool, 5)
 	wg := sync.WaitGroup{}
 
 	// 插入文件记录到用户文件系统
@@ -195,7 +195,9 @@ func (job *ImportTask) Do() {
 				if policy.IsThumbGenerateNeeded() {
 					wg.Add(1)
 					go func() {
+						sem <- true
 						fs.GenerateThumbnailTransaction(ctx, file, tx)
+						<-sem
 						wg.Done()
 					}()
 				}

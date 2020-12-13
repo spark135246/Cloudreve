@@ -84,15 +84,33 @@ func (job *TransferTask) GetError() *JobError {
 func (job *TransferTask) Do() {
 	defer job.Recycle()
 
+	// 事务
+	tx := model.DB.Begin()
+	defer func() {
+		if tx.Error != nil {
+			tx.Rollback()
+			job.SetErrorMsg("导入文件错误", tx.Error)
+		} else {
+			tx.Commit()
+		}
+	}()
+
 	// 创建文件系统
 	fs, err := filesystem.NewFileSystem(job.User)
 	if err != nil {
 		job.SetErrorMsg(err.Error(), nil)
 		return
 	}
+	defer fs.Recycle()
+
+	// 重置tx
+	fs.Tx = tx
+	defer func() {
+		fs.Tx = nil
+	}()
 
 	for index, file := range job.TaskProps.Src {
-		job.TaskModel.SetProgress(index)
+		_ = job.TaskModel.SetProgress(index)
 
 		dst := path.Join(job.TaskProps.Dst, filepath.Base(file))
 		if job.TaskProps.TrimPath {

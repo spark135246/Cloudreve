@@ -299,13 +299,13 @@ func (fs *FileSystem) UploadFromStream1(ctx context.Context, src io.ReadCloser, 
 	fs.Lock.Lock()
 	if fs.Hooks == nil {
 		fs.Use("BeforeUpload", HookValidateFile)
-		fs.Use("BeforeUpload", HookValidateCapacity)
+		fs.Use("BeforeUpload", HookValidateCapacityTransaction)
 		fs.Use("AfterUploadCanceled", HookDeleteTempFile)
-		fs.Use("AfterUploadCanceled", HookGiveBackCapacity)
-		fs.Use("AfterUpload", GenericAfterUpload)
+		fs.Use("AfterUploadCanceled", HookGiveBackCapacityTransaction)
+		fs.Use("AfterUpload", GenericAfterUploadTransaction)
 		fs.Use("AfterValidateFailed", HookDeleteTempFile)
-		fs.Use("AfterValidateFailed", HookGiveBackCapacity)
-		fs.Use("AfterUploadFailed", HookGiveBackCapacity)
+		fs.Use("AfterValidateFailed", HookGiveBackCapacityTransaction)
+		fs.Use("AfterUploadFailed", HookGiveBackCapacityTransaction)
 	}
 	fs.Lock.Unlock()
 
