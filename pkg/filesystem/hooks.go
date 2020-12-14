@@ -395,13 +395,13 @@ func GenericAfterUploadTransaction(ctx context.Context, fs *FileSystem) error {
 	fs.SetTargetFile(&[]model.File{*file})
 
 	// 异步尝试生成缩略图
-	if fs.User.Policy.IsThumbGenerateNeeded() {
-		fs.recycleLock.Lock()
-		go func() {
-			defer fs.recycleLock.Unlock()
-			fs.GenerateThumbnailTransaction(ctx, file, tx)
-		}()
-	}
+	//if fs.User.Policy.IsThumbGenerateNeeded() {
+	//	fs.recycleLock.Lock()
+	//	go func() {
+	//		defer fs.recycleLock.Unlock()
+	//		fs.GenerateThumbnailTransaction(ctx, file, tx)
+	//	}()
+	//}
 
 	return nil
 }
