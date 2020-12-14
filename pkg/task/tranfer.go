@@ -110,7 +110,7 @@ func (job *TransferTask) Do() {
 	}()
 
 	for index, file := range job.TaskProps.Src {
-		_ = job.TaskModel.SetProgress(index)
+		_ = job.TaskModel.SetProgressTransaction(index, tx)
 
 		dst := path.Join(job.TaskProps.Dst, filepath.Base(file))
 		if job.TaskProps.TrimPath {

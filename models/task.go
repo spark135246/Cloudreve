@@ -35,6 +35,11 @@ func (task *Task) SetProgress(progress int) error {
 	return DB.Model(task).Select("progress").Updates(map[string]interface{}{"progress": progress}).Error
 }
 
+// SetProgressTransaction 设定任务进度
+func (task *Task) SetProgressTransaction(progress int, tx *gorm.DB) error {
+	return tx.Model(task).Select("progress").Updates(map[string]interface{}{"progress": progress}).Error
+}
+
 // SetError 设定错误信息
 func (task *Task) SetError(err string) error {
 	return DB.Model(task).Select("error").Updates(map[string]interface{}{"error": err}).Error

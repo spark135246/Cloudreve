@@ -117,7 +117,7 @@ func (job *ImportTask) Do() {
 	fs.Use("AfterValidateFailed", filesystem.HookGiveBackCapacityTransaction)
 
 	// 列取目录、对象
-	job.TaskModel.SetProgress(ListingProgress)
+	job.TaskModel.SetProgressTransaction(ListingProgress, tx)
 	coxIgnoreConflict := context.WithValue(context.Background(), fsctx.IgnoreConflictCtx,
 		true)
 	objects, err := fs.Handler.List(ctx, job.TaskProps.Src, job.TaskProps.Recursive)
@@ -126,7 +126,7 @@ func (job *ImportTask) Do() {
 		return
 	}
 
-	job.TaskModel.SetProgress(InsertingProgress)
+	job.TaskModel.SetProgressTransaction(InsertingProgress, tx)
 
 	// 虚拟目录路径与folder对象ID的对应
 	pathCache := make(map[string]*model.Folder, len(objects))
