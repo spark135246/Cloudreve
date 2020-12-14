@@ -3,6 +3,7 @@ package filesystem
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"strconv"
 
@@ -143,6 +144,45 @@ func (fs *FileSystem) GenerateThumbnailTransaction(ctx context.Context, file *mo
 	if err != nil {
 		_, _ = fs.Handler.Delete(newCtx, []string{file.SourceName + conf.ThumbConfig.FileSuffix})
 	}
+}
+
+// GenerateThumbnailsTransaction 生成多个缩略图
+func (fs *FileSystem) GenerateThumbnailsTransaction(ctx context.Context, tx *gorm.DB) {
+	// 事务提交
+	if tx == nil {
+		tx = model.DB.Begin()
+		defer func() {
+			// 失败回滚
+			if tx.Error != nil {
+				tx.Rollback()
+			} else {
+				// 提交事务
+				tx.Commit()
+				// 提交失败，回滚
+				if tx.Error != nil {
+					tx.Rollback()
+				}
+			}
+		}()
+	}
+
+	// 限制并发为5
+	sem := make(chan bool, 5)
+	wg := sync.WaitGroup{}
+
+	// 遍历处理文件
+	for _, file := range fs.FileTarget {
+		sem <- true
+		wg.Add(1)
+		file := file
+		go func() {
+			fs.GenerateThumbnailTransaction(ctx, &file, tx)
+			<-sem
+			wg.Done()
+		}()
+	}
+	wg.Wait()
+
 }
 
 // GenerateThumbnailSize 获取要生成的缩略图的尺寸

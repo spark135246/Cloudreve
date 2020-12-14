@@ -86,19 +86,12 @@ func (job *TransferTask) Do() {
 
 	// 事务
 	tx := model.DB.Begin()
-	defer func() {
-		if tx.Error != nil {
-			tx.Rollback()
-			job.SetErrorMsg("导入文件错误", tx.Error)
-		} else {
-			tx.Commit()
-		}
-	}()
 
 	// 创建文件系统
 	fs, err := filesystem.NewFileSystem(job.User)
 	if err != nil {
 		job.SetErrorMsg(err.Error(), nil)
+		tx.Rollback()
 		return
 	}
 	defer fs.Recycle()
@@ -126,6 +119,28 @@ func (job *TransferTask) Do() {
 		}
 	}
 
+	// 失败回滚
+	if tx.Error != nil {
+		tx.Rollback()
+		job.SetErrorMsg("文件转存失败", tx.Error)
+		return
+	} else {
+		// 提交事务
+		tx.Commit()
+		// 提交失败回滚
+		if tx.Error != nil {
+			tx.Rollback()
+			job.SetErrorMsg("文件转存失败", tx.Error)
+			return
+		}
+	}
+
+	// 最后生成缩略图
+	// 需要生成缩略图
+	if fs.User.Policy.IsThumbGenerateNeeded() {
+		ctx := context.Background()
+		fs.GenerateThumbnailsTransaction(ctx, nil)
+	}
 }
 
 // Recycle 回收临时文件
