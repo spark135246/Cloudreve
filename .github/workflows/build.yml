@@ -1,0 +1,64 @@
+name: Build
+
+on:
+  push:
+    branches: [ master ]
+
+jobs:
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+
+    - name: Go 1.15 环境
+      uses: actions/setup-go@v1
+      with:
+        go-version: 1.15
+      id: go
+    
+    - name: 检出代码
+        uses: actions/checkout@v2
+        with:
+          ref: master
+    
+    - name: 检出子模块
+        run: |
+          git clone https://github.com/cloudreve/frontend.git assets
+          git fetch --prune --unshallow --tags
+
+    - name: 获取依赖并构建
+      run: |
+        go get github.com/rakyll/statik
+        export PATH=$PATH:~/go/bin/
+        statik -src=models -f
+        sudo apt-get update
+        sudo apt-get -y install gcc-mingw-w64-x86-64
+        sudo apt-get -y install gcc-arm-linux-gnueabihf libc6-dev-armhf-cross
+        sudo apt-get -y install gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+        chmod +x ./build.sh
+        ./build.sh -r b
+
+    - name: Upload binary files (windows_amd64)
+      uses: actions/upload-artifact@v2
+      with:
+        name: cloudreve_windows_amd64
+        path: release/cloudreve*windows_amd64.*
+
+    - name: Upload binary files (linux_amd64)
+      uses: actions/upload-artifact@v2
+      with:
+        name: cloudreve_linux_amd64
+        path: release/cloudreve*linux_amd64.*
+
+    - name: Upload binary files (linux_arm)
+      uses: actions/upload-artifact@v2
+      with:
+        name: cloudreve_linux_arm
+        path: release/cloudreve*linux_arm.*
+
+    - name: Upload binary files (linux_arm64)
+      uses: actions/upload-artifact@v2
+      with:
+        name: cloudreve_linux_arm64
+        path: release/cloudreve*linux_arm64.*
