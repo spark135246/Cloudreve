@@ -3,9 +3,6 @@ package filesystem
 import (
 	"context"
 	"fmt"
-	"strconv"
-	"sync"
-
 	model "github.com/cloudreve/Cloudreve/v3/models"
 	"github.com/cloudreve/Cloudreve/v3/pkg/conf"
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/fsctx"
@@ -13,6 +10,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v3/pkg/thumb"
 	"github.com/cloudreve/Cloudreve/v3/pkg/util"
 	"github.com/jinzhu/gorm"
+	"strconv"
 )
 
 /* ================
@@ -167,20 +165,11 @@ func (fs *FileSystem) GenerateThumbnailsTransaction(ctx context.Context, tx *gor
 		}()
 	}
 
-	wg := sync.WaitGroup{}
 	// 遍历处理文件
 	for _, file := range fs.FileTarget {
-		fs.recycleLock.Lock()
-		file := file
-		wg.Add(1)
-		go func() {
-			defer fs.recycleLock.Unlock()
-			fs.GenerateThumbnailTransaction(ctx, &file, tx)
-			wg.Done()
-		}()
+		fs.GenerateThumbnailTransaction(ctx, &file, tx)
+		util.Log().Info("生成缩略图 %s", file.Name)
 	}
-	// 等待完成
-	wg.Wait()
 }
 
 // GenerateThumbnailSize 获取要生成的缩略图的尺寸
