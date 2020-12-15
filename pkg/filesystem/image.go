@@ -154,12 +154,14 @@ func (fs *FileSystem) GenerateThumbnailsTransaction(ctx context.Context, tx *gor
 		defer func() {
 			// 失败回滚
 			if tx.Error != nil {
+				util.Log().Error("缩略图事务提交前失败，开始回滚 %s", tx.Error)
 				tx.Rollback()
 			} else {
 				// 提交事务
 				tx.Commit()
 				// 提交失败，回滚
 				if tx.Error != nil {
+					util.Log().Error("缩略图事务提交时发生错误，开始回滚 %s", tx.Error)
 					tx.Rollback()
 				}
 			}
