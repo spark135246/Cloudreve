@@ -3,9 +3,8 @@ package filesystem
 import (
 	"context"
 	"fmt"
-	"sync"
-
 	"strconv"
+	"sync"
 
 	model "github.com/cloudreve/Cloudreve/v3/models"
 	"github.com/cloudreve/Cloudreve/v3/pkg/conf"
@@ -168,23 +167,20 @@ func (fs *FileSystem) GenerateThumbnailsTransaction(ctx context.Context, tx *gor
 		}()
 	}
 
-	// 限制并发为5
-	sem := make(chan bool, 5)
 	wg := sync.WaitGroup{}
-
 	// 遍历处理文件
 	for _, file := range fs.FileTarget {
-		sem <- true
-		wg.Add(1)
+		fs.recycleLock.Lock()
 		file := file
+		wg.Add(1)
 		go func() {
+			defer fs.recycleLock.Unlock()
 			fs.GenerateThumbnailTransaction(ctx, &file, tx)
-			<-sem
 			wg.Done()
 		}()
 	}
+	// 等待完成
 	wg.Wait()
-
 }
 
 // GenerateThumbnailSize 获取要生成的缩略图的尺寸

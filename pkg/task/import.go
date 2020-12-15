@@ -3,14 +3,12 @@ package task
 import (
 	"context"
 	"encoding/json"
-	"path"
-	"sync"
-
 	model "github.com/cloudreve/Cloudreve/v3/models"
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem"
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/driver/local"
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/fsctx"
 	"github.com/cloudreve/Cloudreve/v3/pkg/util"
+	"path"
 )
 
 // ImportTask 导入务
@@ -82,19 +80,12 @@ func (job *ImportTask) Do() {
 
 	// 事务
 	tx := model.DB.Begin()
-	defer func() {
-		if tx.Error != nil {
-			tx.Rollback()
-			job.SetErrorMsg("导入文件错误", tx.Error)
-		} else {
-			tx.Commit()
-		}
-	}()
 
 	// 查找存储策略
 	policy, err := model.GetPolicyByID(job.TaskProps.PolicyID)
 	if err != nil {
 		job.SetErrorMsg("找不到存储策略", err)
+		tx.Rollback()
 		return
 	}
 
@@ -103,6 +94,7 @@ func (job *ImportTask) Do() {
 	fs, err := filesystem.NewFileSystem(job.User)
 	if err != nil {
 		job.SetErrorMsg(err.Error(), nil)
+		tx.Rollback()
 		return
 	}
 	fs.Tx = tx
@@ -123,6 +115,7 @@ func (job *ImportTask) Do() {
 	objects, err := fs.Handler.List(ctx, job.TaskProps.Src, job.TaskProps.Recursive)
 	if err != nil {
 		job.SetErrorMsg("无法列取文件", err)
+		tx.Rollback()
 		return
 	}
 
@@ -144,10 +137,6 @@ func (job *ImportTask) Do() {
 			}
 		}
 	}
-
-	// 控制并发5
-	sem := make(chan bool, 5)
-	wg := sync.WaitGroup{}
 
 	// 插入文件记录到用户文件系统
 	for _, object := range objects {
@@ -188,24 +177,38 @@ func (job *ImportTask) Do() {
 					object.RelativePath, err)
 				if err == filesystem.ErrInsufficientCapacity {
 					job.SetErrorMsg("容量不足", err)
+					tx.Rollback()
 					return
 				}
 			} else {
 				// 异步生成缩略图
-				if policy.IsThumbGenerateNeeded() {
-					wg.Add(1)
-					go func() {
-						sem <- true
-						fs.GenerateThumbnailTransaction(ctx, file, tx)
-						<-sem
-						wg.Done()
-					}()
-				}
+				fs.SetTargetFile(&[]model.File{*file})
 			}
 
 		}
 	}
-	wg.Wait() // 等待数据库插入结束
+
+	// 提交事务
+	if tx.Error != nil {
+		tx.Rollback()
+		job.SetErrorMsg("导入文件错误", tx.Error)
+		util.Log().Error("导入文件提交前失败 %s", tx.Error)
+	} else {
+		tx.Commit()
+		// 提交失败回滚
+		if tx.Error != nil {
+			tx.Rollback()
+			job.SetErrorMsg("导入文件错误", tx.Error)
+			util.Log().Error("导入文件提交时失败 %s", tx.Error)
+		}
+	}
+
+	// 生成缩略图
+	if fs.User.Policy.IsThumbGenerateNeeded() {
+		ctx := context.Background()
+		fs.GenerateThumbnailsTransaction(ctx, nil)
+	}
+
 }
 
 // NewImportTask 新建导入任务
