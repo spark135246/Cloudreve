@@ -18,14 +18,14 @@ jobs:
       id: go
     
     - name: 检出代码
-        uses: actions/checkout@v2
-        with:
-          ref: master
+      uses: actions/checkout@v2
+      with:
+        ref: master
     
     - name: 检出子模块
-        run: |
-          git clone https://github.com/cloudreve/frontend.git assets
-          git fetch --prune --unshallow --tags
+      run: |
+        git clone https://github.com/cloudreve/frontend.git assets
+        git fetch --prune --unshallow --tags
 
     - name: 获取依赖并构建
       run: |
