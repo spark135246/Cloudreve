@@ -134,7 +134,7 @@ func GetRecursiveChildFolderTransaction(dirs []uint, uid uint, includeSelf bool,
 	var err error
 
 	var parFolders []Folder
-	for dir := range dirs {
+	for _, dir := range dirs {
 		var folder Folder
 		result := tx.Where("owner_id = ? and id = ?", uid, dir).First(&folder)
 		if result.Error != nil {
@@ -158,7 +158,7 @@ func GetRecursiveChildFolderTransaction(dirs []uint, uid uint, includeSelf bool,
 	// 递归查询子目录,最大递归65535次
 	for i := 0; i < 65535; i++ {
 
-		for parentID := range parentIDs {
+		for _, parentID := range parentIDs {
 			var folderResult []Folder
 			tx.Where("owner_id = ? and parent_id = ?", uid, parentID).Find(&folderResult)
 			parFolders = append(parFolders, folderResult...)
@@ -192,7 +192,7 @@ func DeleteFolderByIDs(ids []uint) error {
 
 // DeleteFolderByIDs 根据给定ID批量删除目录记录
 func DeleteFolderByIDsTransaction(ids []uint, tx *gorm.DB) error {
-	for id := range ids {
+	for _, id := range ids {
 		result := tx.Where("id = ?", id).Unscoped().Delete(&Folder{})
 		if result.Error != nil {
 			return result.Error

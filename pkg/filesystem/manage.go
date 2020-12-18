@@ -237,6 +237,26 @@ func (fs *FileSystem) Delete(ctx context.Context, dirs, files []uint, force bool
 
 // Delete 递归删除对象, force 为 true 时强制删除文件记录，忽略物理删除是否成功
 func (fs *FileSystem) DeleteTransaction(ctx context.Context, dirs, files []uint, force bool, tx *gorm.DB) error {
+	// 事务初始化
+	if tx == nil {
+		tx = model.DB.Begin()
+		defer func() {
+			// 错误回滚
+			if tx.Error != nil {
+				util.Log().Error("删除事务提交前错误 %s", tx.Error)
+				tx.Rollback()
+			} else {
+				//提交
+				tx.Commit()
+				// 提交错误，回滚
+				if tx.Error != nil {
+					util.Log().Error("删除事务提交时错误 %s", tx.Error)
+					tx.Rollback()
+				}
+			}
+		}()
+	}
+
 	// 已删除的总容量,map用于去重
 	var deletedStorage = make(map[uint]uint64)
 	var totalStorage = make(map[uint]uint64)
@@ -315,7 +335,7 @@ func (fs *FileSystem) DeleteTransaction(ctx context.Context, dirs, files []uint,
 		for _, value := range fs.DirTarget {
 			allFolderIDs = append(allFolderIDs, value.ID)
 		}
-		err = model.DeleteFolderByIDs(allFolderIDs)
+		err = model.DeleteFolderByIDsTransaction(allFolderIDs, tx)
 		if err != nil {
 			return ErrDBDeleteObjects.WithError(err)
 		}
@@ -332,7 +352,7 @@ func (fs *FileSystem) DeleteTransaction(ctx context.Context, dirs, files []uint,
 		)
 	}
 
-	return nil
+	return tx.Error
 }
 
 // ListDeleteDirs 递归列出要删除目录，及目录下所有文件

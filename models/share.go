@@ -198,7 +198,7 @@ func DeleteShareBySourceIDs(sources []uint, isDir bool) error {
 
 // DeleteShareBySourceIDs 根据原始资源类型和ID删除文件
 func DeleteShareBySourceIDsTransaction(sources []uint, isDir bool, tx *gorm.DB) error {
-	for source := range sources {
+	for _, source := range sources {
 		result := tx.Where("source_id = ? and is_dir = ?", source, isDir).Delete(&Share{})
 		if result.Error != nil {
 			return result.Error

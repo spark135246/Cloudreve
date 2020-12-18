@@ -108,7 +108,7 @@ func GetFilesByIDsTransaction(ids []uint, uid uint, tx *gorm.DB) ([]File, error)
 
 	// 循环寻找
 	if uid == 0 {
-		for id := range ids {
+		for _, id := range ids {
 			result = tx.Where("id = ?", id).First(&file)
 		}
 		if result != nil && result.Error != nil {
@@ -116,7 +116,7 @@ func GetFilesByIDsTransaction(ids []uint, uid uint, tx *gorm.DB) ([]File, error)
 		}
 		files = append(files, file)
 	} else {
-		for id := range ids {
+		for _, id := range ids {
 			result = tx.Where("id = ? AND user_id = ?", id, uid).First(&file)
 		}
 		if result != nil && result.Error != nil {
@@ -295,7 +295,7 @@ func DeleteFileByIDs(ids []uint) error {
 
 // DeleteFileByIDs 根据给定ID批量删除文件记录
 func DeleteFileByIDsTransaction(ids []uint, tx *gorm.DB) error {
-	for id := range ids {
+	for _, id := range ids {
 		result := tx.Where("id = ?", id).Unscoped().Delete(&File{})
 		if result.Error != nil {
 			return result.Error

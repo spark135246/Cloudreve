@@ -93,11 +93,17 @@ func (service *FileBatchService) Delete(c *gin.Context) serializer.Response {
 	// 事务
 	tx := model.DB.Begin()
 	defer func() {
+		// 提交前错误，回滚
 		if tx.Error != nil {
 			tx.Rollback()
 			serializer.DBErr("无法列出待删除文件", tx.Error)
 		} else {
 			tx.Commit()
+			// 提交失败，回滚
+			if tx.Error != nil {
+				tx.Rollback()
+				serializer.DBErr("无法列出待删除文件", tx.Error)
+			}
 		}
 	}()
 
