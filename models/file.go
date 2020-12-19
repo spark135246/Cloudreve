@@ -103,11 +103,11 @@ func GetFilesByIDs(ids []uint, uid uint) ([]File, error) {
 // UID为0表示忽略用户，只根据文件ID检索
 func GetFilesByIDsTransaction(ids []uint, uid uint, tx *gorm.DB) ([]File, error) {
 	var files []File
-	var file File
 
 	// 循环寻找
 	if uid == 0 {
 		for _, id := range ids {
+			var file File
 			err := tx.Where("id = ?", id).First(&file).Error
 			// 找不到记录
 			if gorm.IsRecordNotFoundError(err) {
@@ -120,6 +120,7 @@ func GetFilesByIDsTransaction(ids []uint, uid uint, tx *gorm.DB) ([]File, error)
 		}
 	} else {
 		for _, id := range ids {
+			var file File
 			err := tx.Where("id = ? AND user_id = ?", id, uid).First(&file).Error
 			// 找不到记录
 			if gorm.IsRecordNotFoundError(err) {
@@ -183,8 +184,19 @@ func GetChildFilesOfFoldersTransaction(folders *[]Folder, tx *gorm.DB) ([]File, 
 
 	// 检索文件
 	var files []File
-	result := tx.Where("folder_id in (?)", folderIDs).Find(&files)
-	return files, result.Error
+	for _, folderID := range folderIDs {
+		var file File
+		err := tx.Where("folder_id = ?", folderID).First(&file).Error
+		// 找不到记录
+		if gorm.IsRecordNotFoundError(err) {
+			continue
+		} else if err != nil {
+			util.Log().Error("批量检索目录子文件错误 %s", err.Error())
+			return nil, err
+		}
+		files = append(files, file)
+	}
+	return files, nil
 }
 
 // GetPolicy 获取文件所属策略
