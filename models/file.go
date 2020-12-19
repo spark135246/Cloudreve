@@ -103,26 +103,33 @@ func GetFilesByIDs(ids []uint, uid uint) ([]File, error) {
 // UID为0表示忽略用户，只根据文件ID检索
 func GetFilesByIDsTransaction(ids []uint, uid uint, tx *gorm.DB) ([]File, error) {
 	var files []File
-	var result *gorm.DB
 	var file File
 
 	// 循环寻找
 	if uid == 0 {
 		for _, id := range ids {
-			result = tx.Where("id = ?", id).First(&file)
+			err := tx.Where("id = ?", id).First(&file).Error
+			// 找不到记录
+			if gorm.IsRecordNotFoundError(err) {
+				continue
+			} else if err != nil { // 其他错误
+				util.Log().Error("根据文件ID批量获取文件 %s", err.Error())
+				return nil, err
+			}
+			files = append(files, file)
 		}
-		if result != nil && result.Error != nil {
-			return files, result.Error
-		}
-		files = append(files, file)
 	} else {
 		for _, id := range ids {
-			result = tx.Where("id = ? AND user_id = ?", id, uid).First(&file)
+			err := tx.Where("id = ? AND user_id = ?", id, uid).First(&file).Error
+			// 找不到记录
+			if gorm.IsRecordNotFoundError(err) {
+				continue
+			} else if err != nil { // 其他错误
+				util.Log().Error("根据文件ID批量获取文件 %s", err.Error())
+				return nil, err
+			}
+			files = append(files, file)
 		}
-		if result != nil && result.Error != nil {
-			return files, result.Error
-		}
-		files = append(files, file)
 	}
 	return files, nil
 }

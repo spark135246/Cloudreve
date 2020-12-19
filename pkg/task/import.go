@@ -82,7 +82,7 @@ func (job *ImportTask) Do() {
 	tx := model.DB.Begin()
 
 	// 查找存储策略
-	policy, err := model.GetPolicyByID(job.TaskProps.PolicyID)
+	policy, err := model.GetPolicyByIDTransaction(job.TaskProps.PolicyID, tx)
 	if err != nil {
 		job.SetErrorMsg("找不到存储策略", err)
 		tx.Rollback()

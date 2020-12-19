@@ -136,9 +136,13 @@ func GetRecursiveChildFolderTransaction(dirs []uint, uid uint, includeSelf bool,
 	var parFolders []Folder
 	for _, dir := range dirs {
 		var folder Folder
-		result := tx.Where("owner_id = ? and id = ?", uid, dir).First(&folder)
-		if result.Error != nil {
-			return folders, err
+		err := tx.Where("owner_id = ? and id = ?", uid, dir).First(&folder).Error
+		// 找不到记录错误
+		if gorm.IsRecordNotFoundError(err) {
+			continue
+		} else if err != nil { // 其他错误
+			util.Log().Error("查找所有递归子目录，包括自身 %s", err.Error())
+			return nil, err
 		}
 		parFolders = append(parFolders, folder)
 	}

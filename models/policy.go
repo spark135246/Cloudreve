@@ -92,6 +92,25 @@ func GetPolicyByID(ID interface{}) (Policy, error) {
 	return policy, result.Error
 }
 
+// GetPolicyByIDTransaction 用ID获取存储策略
+func GetPolicyByIDTransaction(ID interface{}, tx *gorm.DB) (Policy, error) {
+	// 尝试读取缓存
+	cacheKey := "policy_" + strconv.Itoa(int(ID.(uint)))
+	if policy, ok := cache.Get(cacheKey); ok {
+		return policy.(Policy), nil
+	}
+
+	var policy Policy
+	result := tx.First(&policy, ID)
+
+	// 写入缓存
+	if result.Error == nil {
+		_ = cache.Set(cacheKey, policy, -1)
+	}
+
+	return policy, result.Error
+}
+
 // AfterFind 找到存储策略后的钩子
 func (policy *Policy) AfterFind() (err error) {
 	// 解析存储策略设置到OptionsSerialized

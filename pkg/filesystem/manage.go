@@ -286,6 +286,7 @@ func (fs *FileSystem) DeleteTransaction(ctx context.Context, dirs, files []uint,
 	// 去除待删除文件中包含软连接的部分
 	filesToBeDelete, err := model.RemoveFilesWithSoftLinksTransaction(fs.FileTarget, tx)
 	if err != nil {
+		util.Log().Error("去除待删除文件中包含软连接的部分错误 %s", err.Error())
 		return ErrDBListObjects.WithError(err)
 	}
 
@@ -379,6 +380,7 @@ func (fs *FileSystem) ListDeleteDirsTransaction(ctx context.Context, ids []uint,
 	// 列出所有递归子目录
 	folders, err := model.GetRecursiveChildFolderTransaction(ids, fs.User.ID, true, tx)
 	if err != nil {
+		util.Log().Error("递归列出要删除目录，及目录下所有文件错误1 %s", err.Error())
 		return ErrDBListObjects.WithError(err)
 	}
 	fs.SetTargetDir(&folders)
@@ -386,6 +388,7 @@ func (fs *FileSystem) ListDeleteDirsTransaction(ctx context.Context, ids []uint,
 	// 检索目录下的子文件
 	files, err := model.GetChildFilesOfFoldersTransaction(&folders, tx)
 	if err != nil {
+		util.Log().Error("递归列出要删除目录，及目录下所有文件错误2 %s", err.Error())
 		return ErrDBListObjects.WithError(err)
 	}
 	fs.SetTargetFile(&files)
@@ -407,6 +410,7 @@ func (fs *FileSystem) ListDeleteFiles(ctx context.Context, ids []uint) error {
 func (fs *FileSystem) ListDeleteFilesTransaction(ctx context.Context, ids []uint, tx *gorm.DB) error {
 	files, err := model.GetFilesByIDsTransaction(ids, fs.User.ID, tx)
 	if err != nil {
+		util.Log().Error("根据给定的路径列出要删除的文件错误 %s", err.Error())
 		return ErrDBListObjects.WithError(err)
 	}
 	fs.SetTargetFile(&files)
