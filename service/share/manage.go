@@ -1,6 +1,7 @@
 package share
 
 import (
+	"github.com/cloudreve/Cloudreve/v3/pkg/util"
 	"net/url"
 	"time"
 
@@ -91,17 +92,25 @@ func (service *ShareCreateService) Create(c *gin.Context) serializer.Response {
 		return serializer.Err(serializer.CodeNotFound, "原始资源不存在", nil)
 	}
 
+	// 开始事务
+	tx := model.DB.Begin()
+	if tx.Error != nil {
+		tx.Rollback()
+		util.Log().Error("事务创建失败 %s", tx.Error.Error())
+		return serializer.Err(serializer.CodeDBError, "分享链接创建失败", err)
+	}
+
 	// 对象是否存在
 	exist := true
 	if service.IsDir {
-		folder, err := model.GetFoldersByIDs([]uint{sourceID}, user.ID)
+		folder, err := model.GetFoldersByIDsTransaction([]uint{sourceID}, user.ID, tx)
 		if err != nil || len(folder) == 0 {
 			exist = false
 		} else {
 			sourceName = folder[0].Name
 		}
 	} else {
-		file, err := model.GetFilesByIDs([]uint{sourceID}, user.ID)
+		file, err := model.GetFilesByIDsTransaction([]uint{sourceID}, user.ID, tx)
 		if err != nil || len(file) == 0 {
 			exist = false
 		} else {
@@ -109,6 +118,7 @@ func (service *ShareCreateService) Create(c *gin.Context) serializer.Response {
 		}
 	}
 	if !exist {
+		tx.Rollback() //失败回滚
 		return serializer.Err(serializer.CodeNotFound, "原始资源不存在", nil)
 	}
 
@@ -130,17 +140,27 @@ func (service *ShareCreateService) Create(c *gin.Context) serializer.Response {
 	}
 
 	// 创建分享
-	id, err := newShare.Create()
+	id, err := newShare.CreateTransaction(tx)
 	if err != nil {
+		tx.Rollback() //失败回滚
 		return serializer.Err(serializer.CodeDBError, "分享链接创建失败", err)
 	}
 
 	// 获取分享的唯一id
 	uid := hashid.HashID(id, hashid.ShareID)
 	// 最终得到分享链接
-	siteURL := model.GetSiteURL()
+	siteURL := model.GetSiteURLTransaction(tx)
 	sharePath, _ := url.Parse("/s/" + uid)
 	shareURL := siteURL.ResolveReference(sharePath)
+
+	// 提交事务
+	if tx.Error == nil {
+		tx.Commit()
+	} else { //提交失败，回滚
+		tx.Rollback() // 回滚
+		util.Log().Error("分享链接创建,事务提交失败 %s", tx.Error.Error())
+		return serializer.Err(serializer.CodeDBError, "分享链接创建失败", tx.Error)
+	}
 
 	return serializer.Response{
 		Code: 0,

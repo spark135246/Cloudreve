@@ -39,6 +39,24 @@ func GetSettingByName(name string) string {
 	return ""
 }
 
+// GetSettingByNameTransaction 用 Name 获取设置值
+func GetSettingByNameTransaction(name string, tx *gorm.DB) string {
+	var setting Setting
+
+	// 优先从缓存中查找
+	cacheKey := "setting_" + name
+	if optionValue, ok := cache.Get(cacheKey); ok {
+		return optionValue.(string)
+	}
+	// 尝试数据库中查找
+	result := tx.Where("name = ?", name).First(&setting)
+	if result.Error == nil {
+		_ = cache.Set(cacheKey, setting.Value, -1)
+		return setting.Value
+	}
+	return ""
+}
+
 // GetSettingByNames 用多个 Name 获取设置值
 func GetSettingByNames(names ...string) map[string]string {
 	var queryRes []Setting
@@ -71,6 +89,15 @@ func GetSettingByType(types []string) map[string]string {
 // GetSiteURL 获取站点地址
 func GetSiteURL() *url.URL {
 	base, err := url.Parse(GetSettingByName("siteURL"))
+	if err != nil {
+		base, _ = url.Parse("https://cloudreve.org")
+	}
+	return base
+}
+
+// GetSiteURLTransaction 获取站点地址
+func GetSiteURLTransaction(tx *gorm.DB) *url.URL {
+	base, err := url.Parse(GetSettingByNameTransaction("siteURL", tx))
 	if err != nil {
 		base, _ = url.Parse("https://cloudreve.org")
 	}

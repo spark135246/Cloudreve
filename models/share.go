@@ -42,6 +42,15 @@ func (share *Share) Create() (uint, error) {
 	return share.ID, nil
 }
 
+// CreateTransaction 创建分享
+func (share *Share) CreateTransaction(tx *gorm.DB) (uint, error) {
+	if err := tx.Create(share).Error; err != nil {
+		util.Log().Warning("无法插入数据库记录, %s", err)
+		return 0, err
+	}
+	return share.ID, nil
+}
+
 // GetShareByHashID 根据HashID查找分享
 func GetShareByHashID(hashID string) *Share {
 	id, err := hashid.DecodeHashID(hashID, hashid.ShareID)

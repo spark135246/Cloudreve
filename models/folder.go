@@ -212,6 +212,21 @@ func GetFoldersByIDs(ids []uint, uid uint) ([]Folder, error) {
 	return folders, result.Error
 }
 
+// GetFoldersByIDsTransaction 根据ID和用户查找所有目录
+func GetFoldersByIDsTransaction(ids []uint, uid uint, tx *gorm.DB) ([]Folder, error) {
+	var folders []Folder
+	for _, id := range ids {
+		var folder Folder
+		err := tx.Where("id = ? AND owner_id = ?", id, uid).First(&folder).Error
+		if err != nil { //查找错误
+			util.Log().Error("查找错误 id=%d uid=%d %s", id, uid, err.Error())
+			return nil, err
+		}
+		folders = append(folders, folder)
+	}
+	return folders, nil
+}
+
 // MoveOrCopyFileTo 将此目录下的files移动或复制至dstFolder，
 // 返回此操作新增的容量
 func (folder *Folder) MoveOrCopyFileTo(files []uint, dstFolder *Folder, isCopy bool) (uint64, error) {
