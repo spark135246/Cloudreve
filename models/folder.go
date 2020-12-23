@@ -80,6 +80,19 @@ func (folder *Folder) GetChildFolder() ([]Folder, error) {
 	return folders, result.Error
 }
 
+// GetChildFolderTransaction 查找子目录
+func (folder *Folder) GetChildFolderTransaction(tx *gorm.DB) ([]Folder, error) {
+	var folders []Folder
+	result := tx.Where("parent_id = ?", folder.ID).Find(&folders)
+
+	if result.Error == nil {
+		for i := 0; i < len(folders); i++ {
+			folders[i].Position = path.Join(folder.Position, folder.Name)
+		}
+	}
+	return folders, result.Error
+}
+
 // GetRecursiveChildFolder 查找所有递归子目录，包括自身
 func GetRecursiveChildFolder(dirs []uint, uid uint, includeSelf bool) ([]Folder, error) {
 	folders := make([]Folder, 0, len(dirs))

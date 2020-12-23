@@ -422,8 +422,16 @@ func (fs *FileSystem) ListDeleteFilesTransaction(ctx context.Context, ids []uint
 // 有些情况下（如在分享页面列对象）时，
 // 路径需要截取掉被分享目录路径之前的部分。
 func (fs *FileSystem) List(ctx context.Context, dirPath string, pathProcessor func(string) string) ([]Object, error) {
+
+	// 开始事务
+	tx := model.DB.Begin()
+	if tx.Error != nil {
+		util.Log().Error("事务开始错误 %s", tx.Error.Error())
+		return nil, tx.Error
+	}
+
 	// 获取父目录
-	isExist, folder := fs.IsPathExist(dirPath)
+	isExist, folder := fs.IsPathExistTransaction(dirPath, tx)
 	if !isExist {
 		return nil, ErrPathNotExist
 	}
@@ -434,10 +442,19 @@ func (fs *FileSystem) List(ctx context.Context, dirPath string, pathProcessor fu
 	var childFiles []model.File
 
 	// 获取子目录
-	childFolders, _ = folder.GetChildFolder()
+	childFolders, _ = folder.GetChildFolderTransaction(tx)
 
 	// 获取子文件
-	childFiles, _ = folder.GetChildFiles()
+	childFiles, _ = folder.GetChildFilesTransaction(tx)
+
+	// 提交事务
+	if tx.Error == nil {
+		tx.Commit()
+	} else {
+		tx.Rollback()
+		util.Log().Error("事务提交错误 %s", tx.Error.Error())
+		return nil, tx.Error
+	}
 
 	return fs.listObjects(ctx, parentPath, childFiles, childFolders, pathProcessor), nil
 }

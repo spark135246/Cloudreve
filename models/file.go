@@ -86,6 +86,19 @@ func (folder *Folder) GetChildFiles() ([]File, error) {
 	return files, result.Error
 }
 
+// GetChildFilesTransaction 查找目录下子文件
+func (folder *Folder) GetChildFilesTransaction(tx *gorm.DB) ([]File, error) {
+	var files []File
+	result := tx.Where("folder_id = ?", folder.ID).Find(&files)
+
+	if result.Error == nil {
+		for i := 0; i < len(files); i++ {
+			files[i].Position = path.Join(folder.Position, folder.Name)
+		}
+	}
+	return files, result.Error
+}
+
 // GetFilesByIDs 根据文件ID批量获取文件,
 // UID为0表示忽略用户，只根据文件ID检索
 func GetFilesByIDs(ids []uint, uid uint) ([]File, error) {
