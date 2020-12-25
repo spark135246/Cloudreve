@@ -198,8 +198,8 @@ func GetChildFilesOfFoldersTransaction(folders *[]Folder, tx *gorm.DB) ([]File, 
 	// 检索文件
 	var files []File
 	for _, folderID := range folderIDs {
-		var file File
-		err := tx.Where("folder_id = ?", folderID).First(&file).Error
+		var filesResult []File
+		err := tx.Where("folder_id = ?", folderID).Find(&filesResult).Error
 		// 找不到记录
 		if gorm.IsRecordNotFoundError(err) {
 			continue
@@ -207,7 +207,7 @@ func GetChildFilesOfFoldersTransaction(folders *[]Folder, tx *gorm.DB) ([]File, 
 			util.Log().Error("批量检索目录子文件错误 %s", err.Error())
 			return nil, err
 		}
-		files = append(files, file)
+		files = append(files, filesResult...)
 	}
 	return files, nil
 }
@@ -275,12 +275,12 @@ func RemoveFilesWithSoftLinksTransaction(files []File, tx *gorm.DB) ([]File, err
 	var filesWithSoftLinks []File
 
 	for _, value := range files {
-		var files []File
-		result := tx.Where("source_name = ? and policy_id = ? and id != ?", value.SourceName, value.PolicyID, value.ID).Find(&files)
+		var filesResult []File
+		result := tx.Where("source_name = ? and policy_id = ? and id != ?", value.SourceName, value.PolicyID, value.ID).Find(&filesResult)
 		if result.Error != nil {
 			return nil, result.Error
 		}
-		filesWithSoftLinks = append(filesWithSoftLinks, files...)
+		filesWithSoftLinks = append(filesWithSoftLinks, filesResult...)
 	}
 
 	// 过滤具有软连接的文件
