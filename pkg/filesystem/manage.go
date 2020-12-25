@@ -248,11 +248,6 @@ func (fs *FileSystem) DeleteTransaction(ctx context.Context, dirs, files []uint,
 			} else {
 				//提交
 				tx.Commit()
-				// 提交错误，回滚
-				if tx.Error != nil {
-					util.Log().Error("删除事务提交时错误 %s", tx.Error)
-					tx.Rollback()
-				}
 			}
 		}()
 	}

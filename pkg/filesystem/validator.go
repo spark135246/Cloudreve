@@ -74,6 +74,11 @@ func (fs *FileSystem) ValidateExtension(ctx context.Context, fileName string) bo
 	return IsInExtensionList(fs.User.Policy.OptionsSerialized.FileType, fileName)
 }
 
+// ValidateThumbnailExtension 验证是否为缩略图
+func (fs *FileSystem) ValidateThumbnailExtension(ctx context.Context, fileName string) bool {
+	return !IsInExtensionList([]string{"_thumb"}, fileName)
+}
+
 // IsInExtensionList 返回文件的扩展名是否在给定的列表范围内
 func IsInExtensionList(extList []string, fileName string) bool {
 	ext := strings.ToLower(filepath.Ext(fileName))

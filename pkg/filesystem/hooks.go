@@ -111,6 +111,17 @@ func HookValidateFile(ctx context.Context, fs *FileSystem) error {
 
 }
 
+// HookValidateThumbnailExtension 验证是否为缩略图
+func HookValidateThumbnailExtension(ctx context.Context, fs *FileSystem) error {
+	file := ctx.Value(fsctx.FileHeaderCtx).(FileHeader)
+
+	// 验证是否为缩略图
+	if !fs.ValidateThumbnailExtension(ctx, file.GetFileName()) {
+		return ErrFileExtensionNotAllowed
+	}
+	return nil
+}
+
 // HookResetPolicy 重设存储策略为上下文已有文件
 func HookResetPolicy(ctx context.Context, fs *FileSystem) error {
 	originFile, ok := ctx.Value(fsctx.FileModelCtx).(model.File)

@@ -105,6 +105,7 @@ func (job *ImportTask) Do() {
 
 	// 注册钩子
 	fs.Use("BeforeAddFile", filesystem.HookValidateFile)
+	fs.Use("BeforeAddFile", filesystem.HookValidateThumbnailExtension)
 	fs.Use("BeforeAddFile", filesystem.HookValidateCapacityTransaction)
 	fs.Use("AfterValidateFailed", filesystem.HookGiveBackCapacityTransaction)
 
@@ -119,7 +120,7 @@ func (job *ImportTask) Do() {
 		return
 	}
 
-	job.TaskModel.SetProgressTransaction(InsertingProgress, tx)
+	_ = job.TaskModel.SetProgressTransaction(InsertingProgress, tx)
 
 	// 虚拟目录路径与folder对象ID的对应
 	pathCache := make(map[string]*model.Folder, len(objects))
@@ -195,12 +196,6 @@ func (job *ImportTask) Do() {
 		util.Log().Error("导入文件提交前失败 %s", tx.Error)
 	} else {
 		tx.Commit()
-		// 提交失败回滚
-		if tx.Error != nil {
-			tx.Rollback()
-			job.SetErrorMsg("导入文件错误", tx.Error)
-			util.Log().Error("导入文件提交时失败 %s", tx.Error)
-		}
 	}
 
 	// 生成缩略图
