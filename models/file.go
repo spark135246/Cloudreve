@@ -271,35 +271,16 @@ func RemoveFilesWithSoftLinksTransaction(files []File, tx *gorm.DB) ([]File, err
 	// 结果值
 	filteredFiles := make([]File, 0)
 
-	// 查询软链接的文件
-	var filesWithSoftLinks []File
-
 	for _, value := range files {
 		var filesResult []File
 		result := tx.Where("source_name = ? and policy_id = ? and id != ?", value.SourceName, value.PolicyID, value.ID).Find(&filesResult)
 		if result.Error != nil {
 			return nil, result.Error
 		}
-		filesWithSoftLinks = append(filesWithSoftLinks, filesResult...)
-	}
 
-	// 过滤具有软连接的文件
-	// TODO: 优化复杂度
-	if len(filesWithSoftLinks) == 0 {
-		filteredFiles = files
-	} else {
-		for i := 0; i < len(files); i++ {
-			finder := false
-			for _, value := range filesWithSoftLinks {
-				if value.PolicyID == files[i].PolicyID && value.SourceName == files[i].SourceName {
-					finder = true
-					break
-				}
-			}
-			if !finder {
-				filteredFiles = append(filteredFiles, files[i])
-			}
-
+		// 找不到
+		if len(filesResult) == 0 {
+			filteredFiles = append(filteredFiles, value)
 		}
 	}
 
