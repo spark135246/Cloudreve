@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 
 	model "github.com/cloudreve/Cloudreve/v3/models"
 	"github.com/cloudreve/Cloudreve/v3/pkg/auth"
@@ -161,19 +163,51 @@ func (handler Driver) Move(ctx context.Context, file io.ReadCloser, dst string, 
 // 返回未删除的文件，及遇到的最后一个错误
 func (handler Driver) Delete(ctx context.Context, files []string) ([]string, error) {
 	deleteFailed := make([]string, 0, len(files))
+	deleteEmptyFolder := map[string]bool{}
 	var retErr error
 
 	for _, value := range files {
 		err := os.Remove(util.RelativePath(filepath.FromSlash(value)))
 		// 文件存在且报错
-		if err != nil && !os.IsNotExist(err){
-				util.Log().Warning("无法删除文件，%s", err)
-				retErr = err
-				deleteFailed = append(deleteFailed, value)
+		if err != nil && !os.IsNotExist(err) {
+			util.Log().Warning("无法删除文件，%s", err)
+			retErr = err
+			deleteFailed = append(deleteFailed, value)
 		}
 
 		// 尝试删除文件的缩略图（如果有）
 		_ = os.Remove(util.RelativePath(value + conf.ThumbConfig.FileSuffix))
+
+		// 找到父文件夹
+		folderPath := util.RelativePath(filepath.FromSlash(filepath.Dir(value)))
+		if _, ok := deleteEmptyFolder[folderPath]; !ok {
+			deleteEmptyFolder[folderPath] = true
+		}
+	}
+
+	// 转换为切片,为排序做准备
+	folders := make([]string, len(deleteEmptyFolder))
+	i := 0
+	for key, _ := range deleteEmptyFolder {
+		folders[i] = key
+		i++
+	}
+	// 文件夹排序
+	sort.Sort(sort.Reverse(sort.StringSlice(folders)))
+	// 遍历删除空文件夹
+	for _, value := range folders {
+		// 删除空文件夹
+		dirs, _ := ioutil.ReadDir(value)
+		if len(dirs) == 0 {
+			err := os.RemoveAll(value)
+			// 文件存在且报错
+			if err != nil && !os.IsNotExist(err) {
+				util.Log().Warning("无法删除文件夹，%s", err)
+			}
+			util.Log().Info("删除文件夹，%s", value)
+		} else {
+			util.Log().Info("保留文件夹，%s ，文件数，%d", value, len(dirs))
+		}
 	}
 
 	return deleteFailed, retErr
