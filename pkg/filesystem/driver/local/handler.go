@@ -199,10 +199,11 @@ func (handler Driver) Delete(ctx context.Context, files []string) ([]string, err
 		// 删除空文件夹
 		dirs, _ := ioutil.ReadDir(value)
 		if len(dirs) == 0 {
-			err := os.RemoveAll(value)
+			err := os.Remove(value)
 			// 文件存在且报错
 			if err != nil && !os.IsNotExist(err) {
-				util.Log().Warning("无法删除文件夹，%s", err)
+				util.Log().Warning("无法删除文件夹，%s", value)
+				continue
 			}
 			util.Log().Info("删除文件夹，%s", value)
 		} else {

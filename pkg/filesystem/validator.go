@@ -2,6 +2,7 @@ package filesystem
 
 import (
 	"context"
+	"github.com/cloudreve/Cloudreve/v3/pkg/conf"
 
 	"github.com/jinzhu/gorm"
 
@@ -76,7 +77,7 @@ func (fs *FileSystem) ValidateExtension(ctx context.Context, fileName string) bo
 
 // ValidateThumbnailExtension 验证是否为缩略图
 func (fs *FileSystem) ValidateThumbnailExtension(ctx context.Context, fileName string) bool {
-	return !IsInExtensionList([]string{"_thumb"}, fileName)
+	return !IsInExtensionList([]string{conf.ThumbConfig.FileSuffix[1:]}, fileName)
 }
 
 // IsInExtensionList 返回文件的扩展名是否在给定的列表范围内

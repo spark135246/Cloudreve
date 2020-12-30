@@ -10,6 +10,7 @@ import (
 	"github.com/cloudreve/Cloudreve/v3/pkg/thumb"
 	"github.com/cloudreve/Cloudreve/v3/pkg/util"
 	"github.com/jinzhu/gorm"
+	"os"
 	"strconv"
 )
 
@@ -127,8 +128,10 @@ func (fs *FileSystem) GenerateThumbnailTransaction(ctx context.Context, file *mo
 
 	// 生成缩略图
 	image.GetThumb(fs.GenerateThumbnailSize(w, h))
-	// 保存到文件
-	image.Save(util.RelativePath(file.SourceName + conf.ThumbConfig.FileSuffix))
+	// 没有缩略图，保存到文件
+	if _, err = os.Stat(util.RelativePath(file.SourceName + conf.ThumbConfig.FileSuffix)); os.IsNotExist(err) {
+		err = image.Save(util.RelativePath(file.SourceName + conf.ThumbConfig.FileSuffix))
+	}
 
 	// 更新文件的图像信息
 	if file.Model.ID > 0 {
