@@ -24,8 +24,10 @@ func SiteConfig(c *gin.Context) {
 		"home_view_method",
 		"share_view_method",
 		"authn_enabled",
-		"captcha_IsUseReCaptcha",
 		"captcha_ReCaptchaKey",
+		"captcha_type",
+		"captcha_TCaptcha_CaptchaAppId",
+		"register_enabled",
 	)
 
 	// 如果已登录，则同时返回用户信息和标签

@@ -1,54 +1,27 @@
 package user
 
 import (
-	"net/url"
-	"strings"
-	"time"
-
 	model "github.com/cloudreve/Cloudreve/v3/models"
 	"github.com/cloudreve/Cloudreve/v3/pkg/auth"
 	"github.com/cloudreve/Cloudreve/v3/pkg/email"
 	"github.com/cloudreve/Cloudreve/v3/pkg/hashid"
-	"github.com/cloudreve/Cloudreve/v3/pkg/recaptcha"
 	"github.com/cloudreve/Cloudreve/v3/pkg/serializer"
-	"github.com/cloudreve/Cloudreve/v3/pkg/util"
 	"github.com/gin-gonic/gin"
-	"github.com/mojocn/base64Captcha"
+	"net/url"
+	"strings"
 )
 
 // UserRegisterService 管理用户注册的服务
 type UserRegisterService struct {
 	//TODO 细致调整验证规则
-	UserName    string `form:"userName" json:"userName" binding:"required,email"`
-	Password    string `form:"Password" json:"Password" binding:"required,min=4,max=64"`
-	CaptchaCode string `form:"captchaCode" json:"captchaCode"`
+	UserName string `form:"userName" json:"userName" binding:"required,email"`
+	Password string `form:"Password" json:"Password" binding:"required,min=4,max=64"`
 }
 
 // Register 新用户注册
 func (service *UserRegisterService) Register(c *gin.Context) serializer.Response {
 	// 相关设定
-	options := model.GetSettingByNames("email_active", "reg_captcha")
-	// 检查验证码
-	isCaptchaRequired := model.IsTrueVal(options["reg_captcha"])
-	useRecaptcha := model.IsTrueVal(model.GetSettingByName("captcha_IsUseReCaptcha"))
-	recaptchaSecret := model.GetSettingByName("captcha_ReCaptchaSecret")
-	if isCaptchaRequired && !useRecaptcha {
-		captchaID := util.GetSession(c, "captchaID")
-		util.DeleteSession(c, "captchaID")
-		if captchaID == nil || !base64Captcha.VerifyCaptcha(captchaID.(string), service.CaptchaCode) {
-			return serializer.ParamErr("验证码错误", nil)
-		}
-	} else if isCaptchaRequired && useRecaptcha {
-		captcha, err := recaptcha.NewReCAPTCHA(recaptchaSecret, recaptcha.V2, 10*time.Second)
-		if err != nil {
-			util.Log().Error(err.Error())
-		}
-		err = captcha.Verify(service.CaptchaCode)
-		if err != nil {
-			util.Log().Error(err.Error())
-			return serializer.ParamErr("验证失败，请刷新网页后再次验证", nil)
-		}
-	}
+	options := model.GetSettingByNames("email_active")
 
 	// 相关设定
 	isEmailRequired := model.IsTrueVal(options["email_active"])
@@ -64,10 +37,17 @@ func (service *UserRegisterService) Register(c *gin.Context) serializer.Response
 		user.Status = model.NotActivicated
 	}
 	user.GroupID = uint(defaultGroup)
-
+	userNotActivated := false
 	// 创建用户
 	if err := model.DB.Create(&user).Error; err != nil {
-		return serializer.DBErr("此邮箱已被使用", err)
+		//检查已存在使用者是否尚未激活
+		expectedUser, err := model.GetUserByEmail(service.UserName)
+		if expectedUser.Status == model.NotActivicated {
+			userNotActivated = true
+			user = expectedUser
+		} else {
+			return serializer.DBErr("此邮箱已被使用", err)
+		}
 	}
 
 	// 发送激活邮件
@@ -100,8 +80,12 @@ func (service *UserRegisterService) Register(c *gin.Context) serializer.Response
 		if err := email.Send(user.Email, title, body); err != nil {
 			return serializer.Err(serializer.CodeInternalSetting, "无法发送激活邮件", err)
 		}
-
-		return serializer.Response{Code: 203}
+		if userNotActivated == true {
+			//原本在上面要抛出的DBErr，放来这边抛出
+			return serializer.DBErr("用户未激活，已重新发送激活邮件", nil)
+		} else {
+			return serializer.Response{Code: 203}
+		}
 	}
 
 	return serializer.Response{}

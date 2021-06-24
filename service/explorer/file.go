@@ -78,6 +78,7 @@ func (service *SingleFileService) Create(c *gin.Context) serializer.Response {
 	// 上下文
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	ctx = context.WithValue(ctx, fsctx.DisableOverwrite, true)
 
 	// 给文件系统分配钩子
 	fs.Use("BeforeUpload", filesystem.HookValidateFile)
@@ -180,6 +181,33 @@ func (service *FileAnonymousGetService) Download(ctx context.Context, c *gin.Con
 
 	return serializer.Response{
 		Code: 0,
+	}
+}
+
+// Source 重定向到文件的有效原始链接
+func (service *FileAnonymousGetService) Source(ctx context.Context, c *gin.Context) serializer.Response {
+	fs, err := filesystem.NewAnonymousFileSystem()
+	if err != nil {
+		return serializer.Err(serializer.CodeGroupNotAllowed, err.Error(), err)
+	}
+	defer fs.Recycle()
+
+	// 查找文件
+	err = fs.SetTargetFileByIDs([]uint{service.ID})
+	if err != nil {
+		return serializer.Err(serializer.CodeNotSet, err.Error(), err)
+	}
+
+	// 获取文件流
+	res, err := fs.SignURL(ctx, &fs.FileTarget[0],
+		int64(model.GetIntSetting("preview_timeout", 60)), false)
+	if err != nil {
+		return serializer.Err(serializer.CodeNotSet, err.Error(), err)
+	}
+
+	return serializer.Response{
+		Code: -302,
+		Data: res,
 	}
 }
 

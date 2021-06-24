@@ -110,9 +110,9 @@ func (job *ImportTask) Do() {
 	fs.Use("AfterValidateFailed", filesystem.HookGiveBackCapacityTransaction)
 
 	// 列取目录、对象
-	job.TaskModel.SetProgressTransaction(ListingProgress, tx)
-	coxIgnoreConflict := context.WithValue(context.Background(), fsctx.IgnoreConflictCtx,
-		true)
+
+	_ = job.TaskModel.SetProgressTransaction(ListingProgress, tx)
+	coxIgnoreConflict := context.WithValue(context.Background(), fsctx.IgnoreDirectoryConflictCtx, true)
 	objects, err := fs.Handler.List(ctx, job.TaskProps.Src, job.TaskProps.Recursive)
 	if err != nil {
 		job.SetErrorMsg("无法列取文件", err)

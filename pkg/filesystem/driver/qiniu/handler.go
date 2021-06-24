@@ -92,7 +92,7 @@ func (handler Driver) List(ctx context.Context, base string, recursive bool) ([]
 			RelativePath: filepath.ToSlash(rel),
 			Size:         uint64(object.Fsize),
 			IsDir:        false,
-			LastModify:   time.Now(),
+			LastModify:   time.Unix(object.PutTime/10000000, 0),
 		})
 	}
 
@@ -210,7 +210,7 @@ func (handler Driver) Delete(ctx context.Context, files []string) ([]string, err
 	if err != nil {
 		failed := make([]string, 0, len(rets))
 		for k, ret := range rets {
-			if ret.Code != 200 {
+			if ret.Code != 200 && ret.Code != 612 {
 				failed = append(failed, files[k])
 			}
 		}

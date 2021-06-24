@@ -116,16 +116,17 @@ func InitMasterRouter() *gin.Engine {
 		user := v3.Group("user")
 		{
 			// 用户登录
-			user.POST("session", controllers.UserLogin)
+			user.POST("session", middleware.CaptchaRequired("login_captcha"), controllers.UserLogin)
 			// 用户注册
 			user.POST("",
 				middleware.IsFunctionEnabled("register_enabled"),
+				middleware.CaptchaRequired("reg_captcha"),
 				controllers.UserRegister,
 			)
 			// 用二步验证户登录
 			user.POST("2fa", controllers.User2FALogin)
 			// 发送密码重设邮件
-			user.POST("reset", controllers.UserSendReset)
+			user.POST("reset", middleware.CaptchaRequired("forget_captcha"), controllers.UserSendReset)
 			// 通过邮件里的链接重设密码
 			user.PATCH("reset", controllers.UserReset)
 			// 邮件激活
@@ -162,8 +163,10 @@ func InitMasterRouter() *gin.Engine {
 		{
 			file := sign.Group("file")
 			{
-				// 文件外链
+				// 文件外链（直接输出文件数据）
 				file.GET("get/:id/:name", controllers.AnonymousGetContent)
+				// 文件外链(301跳转)
+				file.GET("source/:id/:name", controllers.AnonymousPermLink)
 				// 下載已经打包好的文件
 				file.GET("archive/:id/archive.zip", controllers.DownloadArchive)
 				// 下载文件
@@ -510,6 +513,8 @@ func InitMasterRouter() *gin.Engine {
 				object.POST("copy", controllers.Copy)
 				// 重命名对象
 				object.POST("rename", controllers.Rename)
+				// 获取对象属性
+				object.GET("property/:id", controllers.GetProperty)
 			}
 
 			// 分享

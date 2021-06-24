@@ -11,10 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
 
-    - name: Go 1.15 环境
+    - name: Go 1.16 环境
       uses: actions/setup-go@v1
       with:
-        go-version: 1.15
+        go-version: 1.16
       id: go
     
     - name: 检出代码

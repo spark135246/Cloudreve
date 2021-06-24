@@ -1,31 +1,36 @@
 package serializer
 
-import model "github.com/cloudreve/Cloudreve/v3/models"
+import (
+	model "github.com/cloudreve/Cloudreve/v3/models"
+	"time"
+)
 
 // SiteConfig 站点全局设置序列
 type SiteConfig struct {
-	SiteName           string `json:"title"`
-	SiteICPId          string `json:"siteICPId"`
-	LoginCaptcha       bool   `json:"loginCaptcha"`
-	RegCaptcha         bool   `json:"regCaptcha"`
-	ForgetCaptcha      bool   `json:"forgetCaptcha"`
-	EmailActive        bool   `json:"emailActive"`
-	Themes             string `json:"themes"`
-	DefaultTheme       string `json:"defaultTheme"`
-	HomepageViewMethod string `json:"home_view_method"`
-	ShareViewMethod    string `json:"share_view_method"`
-	Authn              bool   `json:"authn"`
-	User               User   `json:"user"`
-	UseReCaptcha       bool   `json:"captcha_IsUseReCaptcha"`
-	ReCaptchaKey       string `json:"captcha_ReCaptchaKey"`
+	SiteName             string `json:"title"`
+	SiteICPId            string `json:"siteICPId"`
+	LoginCaptcha         bool   `json:"loginCaptcha"`
+	RegCaptcha           bool   `json:"regCaptcha"`
+	ForgetCaptcha        bool   `json:"forgetCaptcha"`
+	EmailActive          bool   `json:"emailActive"`
+	Themes               string `json:"themes"`
+	DefaultTheme         string `json:"defaultTheme"`
+	HomepageViewMethod   string `json:"home_view_method"`
+	ShareViewMethod      string `json:"share_view_method"`
+	Authn                bool   `json:"authn"`
+	User                 User   `json:"user"`
+	ReCaptchaKey         string `json:"captcha_ReCaptchaKey"`
+	CaptchaType          string `json:"captcha_type"`
+	TCaptchaCaptchaAppId string `json:"tcaptcha_captcha_app_id"`
+	RegisterEnabled      bool   `json:"registerEnabled"`
 }
 
 type task struct {
-	Status     int    `json:"status"`
-	Type       int    `json:"type"`
-	CreateDate string `json:"create_date"`
-	Progress   int    `json:"progress"`
-	Error      string `json:"error"`
+	Status     int       `json:"status"`
+	Type       int       `json:"type"`
+	CreateDate time.Time `json:"create_date"`
+	Progress   int       `json:"progress"`
+	Error      string    `json:"error"`
 }
 
 // BuildTaskList 构建任务列表响应
@@ -35,7 +40,7 @@ func BuildTaskList(tasks []model.Task, total int) Response {
 		res = append(res, task{
 			Status:     t.Status,
 			Type:       t.Type,
-			CreateDate: t.CreatedAt.Format("2006-01-02 15:04:05"),
+			CreateDate: t.CreatedAt,
 			Progress:   t.Progress,
 			Error:      t.Error,
 		})
@@ -64,20 +69,22 @@ func BuildSiteConfig(settings map[string]string, user *model.User) Response {
 	}
 	res := Response{
 		Data: SiteConfig{
-			SiteName:           checkSettingValue(settings, "siteName"),
-			SiteICPId:          checkSettingValue(settings, "siteICPId"),
-			LoginCaptcha:       model.IsTrueVal(checkSettingValue(settings, "login_captcha")),
-			RegCaptcha:         model.IsTrueVal(checkSettingValue(settings, "reg_captcha")),
-			ForgetCaptcha:      model.IsTrueVal(checkSettingValue(settings, "forget_captcha")),
-			EmailActive:        model.IsTrueVal(checkSettingValue(settings, "email_active")),
-			Themes:             checkSettingValue(settings, "themes"),
-			DefaultTheme:       checkSettingValue(settings, "defaultTheme"),
-			HomepageViewMethod: checkSettingValue(settings, "home_view_method"),
-			ShareViewMethod:    checkSettingValue(settings, "share_view_method"),
-			Authn:              model.IsTrueVal(checkSettingValue(settings, "authn_enabled")),
-			User:               userRes,
-			UseReCaptcha:       model.IsTrueVal(checkSettingValue(settings, "captcha_IsUseReCaptcha")),
-			ReCaptchaKey:       checkSettingValue(settings, "captcha_ReCaptchaKey"),
+			SiteName:             checkSettingValue(settings, "siteName"),
+			SiteICPId:            checkSettingValue(settings, "siteICPId"),
+			LoginCaptcha:         model.IsTrueVal(checkSettingValue(settings, "login_captcha")),
+			RegCaptcha:           model.IsTrueVal(checkSettingValue(settings, "reg_captcha")),
+			ForgetCaptcha:        model.IsTrueVal(checkSettingValue(settings, "forget_captcha")),
+			EmailActive:          model.IsTrueVal(checkSettingValue(settings, "email_active")),
+			Themes:               checkSettingValue(settings, "themes"),
+			DefaultTheme:         checkSettingValue(settings, "defaultTheme"),
+			HomepageViewMethod:   checkSettingValue(settings, "home_view_method"),
+			ShareViewMethod:      checkSettingValue(settings, "share_view_method"),
+			Authn:                model.IsTrueVal(checkSettingValue(settings, "authn_enabled")),
+			User:                 userRes,
+			ReCaptchaKey:         checkSettingValue(settings, "captcha_ReCaptchaKey"),
+			CaptchaType:          checkSettingValue(settings, "captcha_type"),
+			TCaptchaCaptchaAppId: checkSettingValue(settings, "captcha_TCaptcha_CaptchaAppId"),
+			RegisterEnabled:      model.IsTrueVal(checkSettingValue(settings, "register_enabled")),
 		}}
 	return res
 }

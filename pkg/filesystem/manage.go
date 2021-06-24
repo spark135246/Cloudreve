@@ -8,6 +8,7 @@ import (
 
 	"path"
 	"strings"
+	"time"
 
 	model "github.com/cloudreve/Cloudreve/v3/models"
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/fsctx"
@@ -23,14 +24,14 @@ import (
 
 // Object 文件或者目录
 type Object struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Path string `json:"path"`
-	Pic  string `json:"pic"`
-	Size uint64 `json:"size"`
-	Type string `json:"type"`
-	Date string `json:"date"`
-	Key  string `json:"key,omitempty"`
+	ID   string    `json:"id"`
+	Name string    `json:"name"`
+	Path string    `json:"path"`
+	Pic  string    `json:"pic"`
+	Size uint64    `json:"size"`
+	Type string    `json:"type"`
+	Date time.Time `json:"date"`
+	Key  string    `json:"key,omitempty"`
 }
 
 // Rename 重命名对象
@@ -517,7 +518,7 @@ func (fs *FileSystem) listObjects(ctx context.Context, parent string, files []mo
 			Pic:  "",
 			Size: 0,
 			Type: "dir",
-			Date: subFolder.CreatedAt.Format("2006-01-02 15:04:05"),
+			Date: subFolder.CreatedAt,
 		})
 	}
 
@@ -537,7 +538,7 @@ func (fs *FileSystem) listObjects(ctx context.Context, parent string, files []mo
 			Pic:  file.PicInfo,
 			Size: file.Size,
 			Type: "file",
-			Date: file.CreatedAt.Format("2006-01-02 15:04:05"),
+			Date: file.CreatedAt,
 		}
 		if shareKey != "" {
 			newFile.Key = shareKey
@@ -571,8 +572,8 @@ func (fs *FileSystem) CreateDirectory(ctx context.Context, fullPath string) (*mo
 	isExist, parent := fs.IsPathExist(base)
 	if !isExist {
 		// 递归创建父目录
-		if _, ok := ctx.Value(fsctx.IgnoreConflictCtx).(bool); !ok {
-			ctx = context.WithValue(ctx, fsctx.IgnoreConflictCtx, true)
+		if _, ok := ctx.Value(fsctx.IgnoreDirectoryConflictCtx).(bool); !ok {
+			ctx = context.WithValue(ctx, fsctx.IgnoreDirectoryConflictCtx, true)
 		}
 		newParent, err := fs.CreateDirectory(ctx, base)
 		if err != nil {
@@ -595,7 +596,7 @@ func (fs *FileSystem) CreateDirectory(ctx context.Context, fullPath string) (*mo
 	_, err := newFolder.Create()
 
 	if err != nil {
-		if _, ok := ctx.Value(fsctx.IgnoreConflictCtx).(bool); !ok {
+		if _, ok := ctx.Value(fsctx.IgnoreDirectoryConflictCtx).(bool); !ok {
 			return nil, ErrFolderExisted
 		}
 
@@ -626,8 +627,8 @@ func (fs *FileSystem) CreateDirectoryTransaction(ctx context.Context, fullPath s
 	isExist, parent := fs.IsPathExistTransaction(base, tx)
 	if !isExist {
 		// 递归创建父目录
-		if _, ok := ctx.Value(fsctx.IgnoreConflictCtx).(bool); !ok {
-			ctx = context.WithValue(ctx, fsctx.IgnoreConflictCtx, true)
+		if _, ok := ctx.Value(fsctx.IgnoreDirectoryConflictCtx).(bool); !ok {
+			ctx = context.WithValue(ctx, fsctx.IgnoreDirectoryConflictCtx, true)
 		}
 		newParent, err := fs.CreateDirectoryTransaction(ctx, base, tx)
 		if err != nil {
@@ -650,7 +651,7 @@ func (fs *FileSystem) CreateDirectoryTransaction(ctx context.Context, fullPath s
 	_, err := newFolder.CreateTransaction(tx)
 
 	if err != nil {
-		if _, ok := ctx.Value(fsctx.IgnoreConflictCtx).(bool); !ok {
+		if _, ok := ctx.Value(fsctx.IgnoreDirectoryConflictCtx).(bool); !ok {
 			return nil, ErrFolderExisted
 		}
 

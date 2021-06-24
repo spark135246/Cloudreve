@@ -371,6 +371,9 @@ func (h *Handler) handlePut(w http.ResponseWriter, r *http.Request, fs *filesyst
 		fs.Use("AfterValidateFailed", filesystem.HookDeleteTempFile)
 		fs.Use("AfterValidateFailed", filesystem.HookGiveBackCapacity)
 		fs.Use("AfterUploadFailed", filesystem.HookGiveBackCapacity)
+
+		// 禁止覆盖
+		ctx = context.WithValue(ctx, fsctx.DisableOverwrite, true)
 	}
 
 	// 执行上传
@@ -407,8 +410,8 @@ func (h *Handler) handleMkcol(w http.ResponseWriter, r *http.Request, fs *filesy
 		return http.StatusUnsupportedMediaType, nil
 	}
 	if strings.Contains(r.UserAgent(), "rclone") {
-		if _, ok := ctx.Value(fsctx.IgnoreConflictCtx).(bool); !ok {
-			ctx = context.WithValue(ctx, fsctx.IgnoreConflictCtx, true)
+		if _, ok := ctx.Value(fsctx.IgnoreDirectoryConflictCtx).(bool); !ok {
+			ctx = context.WithValue(ctx, fsctx.IgnoreDirectoryConflictCtx, true)
 		}
 	}
 	if _, err := fs.CreateDirectory(ctx, reqPath); err != nil {
