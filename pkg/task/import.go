@@ -74,6 +74,130 @@ func (job *ImportTask) GetError() *JobError {
 	return job.Err
 }
 
+// Import 导入目录
+func ImportDir(policyId uint, user *model.User, recursive bool, src string, dst string) error {
+	ctx := context.Background()
+
+	// 事务
+	tx := model.DB.Begin()
+
+	// 查找存储策略
+	/*policy, err := model.GetPolicyByIDTransaction(policyId, tx)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}*/
+
+	// 创建文件系统
+	//job.User.Policy = policy
+	fs, err := filesystem.NewFileSystem(user)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	fs.Tx = tx
+	defer fs.Recycle()
+	defer func() {
+		fs.Tx = nil
+	}()
+
+	// 注册钩子
+	fs.Use("BeforeAddFile", filesystem.HookValidateFile)
+	fs.Use("BeforeAddFile", filesystem.HookValidateThumbnailExtension)
+	fs.Use("BeforeAddFile", filesystem.HookValidateCapacityTransaction)
+	fs.Use("AfterValidateFailed", filesystem.HookGiveBackCapacityTransaction)
+
+	// 列取目录、对象
+	coxIgnoreConflict := context.WithValue(context.Background(), fsctx.IgnoreDirectoryConflictCtx, true)
+	objects, err := fs.Handler.List(ctx, src, recursive)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	// 虚拟目录路径与folder对象ID的对应
+	pathCache := make(map[string]*model.Folder, len(objects))
+
+	// 插入目录记录到用户文件系统
+	for _, object := range objects {
+		if object.IsDir {
+			// 创建目录
+			virtualPath := path.Join(dst, object.RelativePath)
+			folder, err := fs.CreateDirectoryTransaction(coxIgnoreConflict, virtualPath, tx)
+			if err != nil {
+				util.Log().Warning("导入任务无法创建用户目录[%s], %s", virtualPath, err)
+			} else if folder.ID > 0 {
+				pathCache[virtualPath] = folder
+			}
+		}
+	}
+
+	// 插入文件记录到用户文件系统
+	for _, object := range objects {
+		if !object.IsDir {
+			// 创建文件信息
+			virtualPath := path.Dir(path.Join(dst, object.RelativePath))
+			fileHeader := local.FileStream{
+				Size:        object.Size,
+				VirtualPath: virtualPath,
+				Name:        object.Name,
+			}
+			addFileCtx := context.WithValue(ctx, fsctx.FileHeaderCtx, fileHeader)
+			addFileCtx = context.WithValue(addFileCtx, fsctx.SavePathCtx, object.Source)
+
+			// 查找父目录
+			parentFolder := &model.Folder{}
+			if parent, ok := pathCache[virtualPath]; ok {
+				parentFolder = parent
+			} else {
+				exist, folder := fs.IsPathExistTransaction(virtualPath, tx)
+				if exist {
+					parentFolder = folder
+				} else {
+					folder, err := fs.CreateDirectoryTransaction(context.Background(), virtualPath, tx)
+					if err != nil {
+						util.Log().Warning("导入任务无法创建用户目录[%s], %s",
+							virtualPath, err)
+						continue
+					}
+					parentFolder = folder
+				}
+			}
+
+			// 插入文件记录
+			file, err := fs.AddFileTransaction(addFileCtx, parentFolder, tx)
+			if err != nil {
+				util.Log().Warning("导入任务无法创插入文件[%s], %s",
+					object.RelativePath, err)
+				if err == filesystem.ErrInsufficientCapacity {
+					tx.Rollback()
+					return err
+				}
+			} else {
+				// 异步生成缩略图
+				fs.SetTargetFile(&[]model.File{*file})
+			}
+
+		}
+	}
+
+	// 提交事务
+	if tx.Error != nil {
+		tx.Rollback()
+		util.Log().Error("导入文件提交前失败 %s", tx.Error)
+		return err
+	} else {
+		tx.Commit()
+	}
+
+	// 生成缩略图
+	if fs.User.Policy.IsThumbGenerateNeeded() {
+		ctx := context.Background()
+		fs.GenerateThumbnailsTransaction(ctx, nil)
+	}
+	return nil
+}
+
 // Do 开始执行任务
 func (job *ImportTask) Do() {
 	ctx := context.Background()

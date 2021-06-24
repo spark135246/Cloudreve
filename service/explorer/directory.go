@@ -2,6 +2,10 @@ package explorer
 
 import (
 	"context"
+	"fmt"
+	model "github.com/cloudreve/Cloudreve/v3/models"
+	"github.com/cloudreve/Cloudreve/v3/pkg/task"
+	"regexp"
 
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem"
 	"github.com/cloudreve/Cloudreve/v3/pkg/hashid"
@@ -22,6 +26,28 @@ func (service *DirectoryService) ListDirectory(c *gin.Context) serializer.Respon
 		return serializer.Err(serializer.CodePolicyNotAllowed, err.Error(), err)
 	}
 	defer fs.Recycle()
+
+	// 判断根目录，导入根目录文件
+	rex, _ := regexp.Compile(`^(\/root)$|^(\/root\/)`)
+	if rex.MatchString(service.Path) {
+		var src string
+		// 拆分
+		if service.Path == "/root" {
+			src = "root"
+		} else {
+			src = "root/" + service.Path[5:]
+		}
+		// 导入目录
+		fmt.Println("开始导入目录")
+		if user, _ := c.Get("user"); user != nil {
+			if u, ok := user.(*model.User); ok {
+				err = task.ImportDir(u.Policy.ID, u, false, src, "/"+src)
+				if err != nil {
+					fmt.Println("导入错误")
+				}
+			}
+		}
+	}
 
 	// 上下文
 	ctx, cancel := context.WithCancel(context.Background())
