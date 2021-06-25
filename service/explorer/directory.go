@@ -42,7 +42,7 @@ func (service *DirectoryService) ListDirectory(c *gin.Context) serializer.Respon
 		fmt.Println("开始导入目录")
 		if user, _ := c.Get("user"); user != nil {
 			if u, ok := user.(*model.User); ok {
-				err = task.ImportDir(u.Policy.ID, u, false, src, "/"+src)
+				err = task.ImportDir(u.Policy.ID, u, false, src, "/root"+src[5:])
 				if err != nil {
 					fmt.Println("导入错误")
 				}
