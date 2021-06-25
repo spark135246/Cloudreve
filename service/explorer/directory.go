@@ -5,6 +5,7 @@ import (
 	"fmt"
 	model "github.com/cloudreve/Cloudreve/v3/models"
 	"github.com/cloudreve/Cloudreve/v3/pkg/task"
+	"github.com/cloudreve/Cloudreve/v3/pkg/util"
 	"regexp"
 
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem"
@@ -28,9 +29,9 @@ func (service *DirectoryService) ListDirectory(c *gin.Context) serializer.Respon
 	defer fs.Recycle()
 
 	// 判断根目录，导入根目录文件
+	var src string
 	rex, _ := regexp.Compile(`^(\/root)$|^(\/root\/)`)
 	if rex.MatchString(service.Path) {
-		var src string
 		// 拆分
 		if service.Path == "/root" {
 			src = "root"
@@ -62,6 +63,70 @@ func (service *DirectoryService) ListDirectory(c *gin.Context) serializer.Respon
 	var parentID uint
 	if len(fs.DirTarget) > 0 {
 		parentID = fs.DirTarget[0].ID
+	}
+	rex, _ = regexp.Compile(`^(\/root)$|^(\/root\/)`)
+	if rex.MatchString(service.Path) {
+		//
+		responseObjects, err := fs.Handler.List(ctx, src, false)
+		if err != nil {
+			util.Log().Error("取得列表错误 %s", err.Error())
+			return serializer.Err(serializer.CodeNotSet, err.Error(), err)
+		}
+		files, folders, err := fs.List1(ctx, service.Path, nil)
+		if err != nil {
+			util.Log().Error("取得列表错误 %s", err.Error())
+			return serializer.Err(serializer.CodeNotSet, err.Error(), err)
+		}
+		// 获取要删除的文件
+		deleteFiles := make([]model.File, 0)
+		deleteFolder := make([]model.Folder, 0)
+		for _, file := range files {
+			ok := true
+			for _, object := range responseObjects {
+				if object.Source == file.SourceName {
+					ok = false
+					break
+				}
+			}
+			if ok {
+				deleteFiles = append(deleteFiles, file)
+			}
+		}
+		for _, folder := range folders {
+			ok := true
+			for _, object := range objects {
+				if object.Name == folder.Name {
+					ok = false
+					break
+				}
+			}
+			if ok {
+				deleteFolder = append(deleteFolder, folder)
+			}
+
+		}
+		// 删除文件
+		deleteFileIds := make([]uint, len(deleteFiles))
+		deleteFolderIds := make([]uint, len(deleteFolder))
+		for _, v := range deleteFiles {
+			deleteFileIds = append(deleteFileIds, v.ID)
+		}
+		for _, v := range deleteFolder {
+			deleteFolderIds = append(deleteFolderIds, v.ID)
+		}
+		fs.DirTarget = nil
+		if len(deleteFileIds) > 0 || len(deleteFolderIds) > 0 {
+			err = fs.DeleteTransaction(ctx, deleteFolderIds, deleteFileIds, true, nil)
+			if err != nil {
+				util.Log().Error("删除错误 ", err.Error())
+				return serializer.Err(serializer.CodeNotSet, err.Error(), err)
+			}
+		}
+		// 获取子项目
+		objects, err = fs.List(ctx, service.Path, nil)
+		if err != nil {
+			return serializer.Err(serializer.CodeNotSet, err.Error(), err)
+		}
 	}
 
 	return serializer.Response{

@@ -429,6 +429,7 @@ func (fs *FileSystem) List(ctx context.Context, dirPath string, pathProcessor fu
 	// 获取父目录
 	isExist, folder := fs.IsPathExistTransaction(dirPath, tx)
 	if !isExist {
+		tx.Rollback()
 		return nil, ErrPathNotExist
 	}
 	fs.SetTargetDir(&[]model.Folder{*folder})
@@ -453,6 +454,45 @@ func (fs *FileSystem) List(ctx context.Context, dirPath string, pathProcessor fu
 	}
 
 	return fs.listObjects(ctx, parentPath, childFiles, childFolders, pathProcessor), nil
+}
+
+func (fs *FileSystem) List1(ctx context.Context, dirPath string, pathProcessor func(string) string) ([]model.File, []model.Folder, error) {
+
+	// 开始事务
+	tx := model.DB.Begin()
+	if tx.Error != nil {
+		util.Log().Error("事务开始错误 %s", tx.Error.Error())
+		return nil, nil, tx.Error
+	}
+
+	// 获取父目录
+	isExist, folder := fs.IsPathExistTransaction(dirPath, tx)
+	if !isExist {
+		tx.Rollback()
+		return nil, nil, ErrPathNotExist
+	}
+	fs.SetTargetDir(&[]model.Folder{*folder})
+
+	//var parentPath = path.Join(folder.Position, folder.Name)
+	var childFolders []model.Folder
+	var childFiles []model.File
+
+	// 获取子目录
+	childFolders, _ = folder.GetChildFolderTransaction(tx)
+
+	// 获取子文件
+	childFiles, _ = folder.GetChildFilesTransaction(tx)
+
+	// 提交事务
+	if tx.Error == nil {
+		tx.Commit()
+	} else {
+		tx.Rollback()
+		util.Log().Error("事务提交错误 %s", tx.Error.Error())
+		return nil, nil, tx.Error
+	}
+
+	return childFiles, childFolders, nil
 }
 
 // ListPhysical 列出存储策略中的外部目录
