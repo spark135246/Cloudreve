@@ -34,9 +34,9 @@ func (service *DirectoryService) ListDirectory(c *gin.Context) serializer.Respon
 	if rex.MatchString(service.Path) {
 		// 拆分
 		if service.Path == "/root" {
-			src = "root"
+			src = "/data"
 		} else {
-			src = "root/" + service.Path[5:]
+			src = "/data/" + service.Path[5:]
 		}
 		// 导入目录
 		fmt.Println("开始导入目录")
