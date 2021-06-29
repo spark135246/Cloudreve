@@ -238,6 +238,38 @@ func DeleteFolderByIDsTransaction(ids []uint, tx *gorm.DB) error {
 	return nil
 }
 
+// GetFolderPaths 根据给定ID批量删除目录记录
+func GetFolderPaths(ids []uint, tx *gorm.DB) ([]string, error) {
+	folderPaths := make([]string, 0)
+	for _, id := range ids {
+		var parentFolder Folder
+		err := tx.Where("id = ?", id).First(&parentFolder).Error
+		if err != nil {
+			return nil, err
+		}
+		folderPath := "/" + parentFolder.Name
+		// 查找父文件夹
+		for true {
+			if parentFolder.ParentID == nil {
+				break
+			}
+			var folder Folder
+			err = tx.Where("id = ?", *parentFolder.ParentID).First(&folder).Error
+			if err != nil {
+				return nil, err
+			}
+			parentFolder = folder
+			if folder.ParentID == nil {
+				break
+			}
+			folderPath = "/" + folder.Name + folderPath
+		}
+		// 添加进数组
+		folderPaths = append(folderPaths, folderPath)
+	}
+	return folderPaths, nil
+}
+
 // GetFoldersByIDs 根据ID和用户查找所有目录
 func GetFoldersByIDs(ids []uint, uid uint) ([]Folder, error) {
 	var folders []Folder

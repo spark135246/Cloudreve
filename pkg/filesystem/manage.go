@@ -3,8 +3,9 @@ package filesystem
 import (
 	"context"
 	"fmt"
-
 	"github.com/jinzhu/gorm"
+	"os"
+	"regexp"
 
 	"path"
 	"strings"
@@ -253,6 +254,14 @@ func (fs *FileSystem) DeleteTransaction(ctx context.Context, dirs, files []uint,
 		}()
 	}
 
+	// 取得路径
+	folderPaths, err := model.GetFolderPaths(dirs, tx)
+	if err != nil {
+		tx.Rollback()
+		util.Log().Error("取得路径错误", err.Error())
+		return err
+	}
+
 	// 已删除的总容量,map用于去重
 	var deletedStorage = make(map[uint]uint64)
 	var totalStorage = make(map[uint]uint64)
@@ -347,6 +356,24 @@ func (fs *FileSystem) DeleteTransaction(ctx context.Context, dirs, files []uint,
 			fmt.Sprintf("有 %d 个文件未能成功删除", notDeleted),
 			nil,
 		)
+	}
+
+	// 本地存储，且为root
+	rex, _ := regexp.Compile(`^(\/root)$|^(\/root\/)`)
+	if fs.User != nil && fs.User.Policy.Type == "local" {
+		for _, folderPath := range folderPaths {
+			if rex.MatchString(folderPath) {
+				// 拆分
+				var src string
+				if folderPath == "/root" {
+					src = "/data"
+				} else {
+					src = "/data" + folderPath[5:]
+					util.Log().Info("删除文件夹 %s", src)
+					_ = os.RemoveAll(src)
+				}
+			}
+		}
 	}
 
 	return tx.Error
