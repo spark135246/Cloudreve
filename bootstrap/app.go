@@ -15,7 +15,7 @@ func InitApplication() {
 	fmt.Print(`
    ___ _                 _                    
   / __\ | ___  _   _  __| |_ __ _____   _____ 
- / /  | |/ _ \| | | |/ _ | '__/ _ \ \ / / _ \	
+ / /  | |/ _ \| | | |/ _  | '__/ _ \ \ / / _ \	
 / /___| | (_) | |_| | (_| | | |  __/\ V /  __/
 \____/|_|\___/ \__,_|\__,_|_|  \___| \_/ \___|
 
@@ -34,7 +34,7 @@ type GitHubRelease struct {
 
 // CheckUpdate 检查更新
 func CheckUpdate() {
-	client := request.HTTPClient{}
+	client := request.NewClient()
 	res, err := client.Request("GET", "https://api.github.com/repos/cloudreve/cloudreve/releases", nil).GetResponse()
 	if err != nil {
 		util.Log().Warning("更新检查失败, %s", err)

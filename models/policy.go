@@ -3,8 +3,7 @@ package model
 import (
 	"encoding/gob"
 	"encoding/json"
-	"fmt"
-	"net/url"
+	"github.com/gofrs/uuid"
 	"path"
 	"path/filepath"
 	"strconv"
@@ -37,6 +36,7 @@ type Policy struct {
 
 	// 数据库忽略字段
 	OptionsSerialized PolicyOption `gorm:"-"`
+	MasterID          string       `gorm:"-"`
 }
 
 // PolicyOption 非公有的存储策略属性
@@ -57,8 +57,17 @@ type PolicyOption struct {
 	Region string `json:"region,omitempty"`
 	// ServerSideEndpoint 服务端请求使用的 Endpoint，为空时使用 Policy.Server 字段
 	ServerSideEndpoint string `json:"server_side_endpoint,omitempty"`
+	// 分片上传的分片大小
+	ChunkSize uint64 `json:"chunk_size,omitempty"`
+	// 分片上传时是否需要预留空间
+	PlaceholderWithSize bool `json:"placeholder_with_size,omitempty"`
+	// 每秒对存储端的 API 请求上限
+	TPSLimit float64 `json:"tps_limit,omitempty"`
+	// 每秒 API 请求爆发上限
+	TPSLimitBurst int `json:"tps_limit_burst,omitempty"`
 }
 
+// thumbSuffix 支持缩略图处理的文件扩展名
 var thumbSuffix = map[string][]string{
 	"local":    {},
 	"qiniu":    {".psd", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".tiff", ".bmp"},
@@ -166,7 +175,7 @@ func (policy *Policy) GeneratePath(uid uint, origin string) string {
 func (policy *Policy) GenerateFileName(uid uint, origin string) string {
 	// 未开启自动重命名时，直接返回原始文件名
 	if !policy.AutoRename {
-		return policy.getOriginNameRule(origin)
+		return origin
 	}
 
 	fileRule := policy.FileNameRule
@@ -185,33 +194,13 @@ func (policy *Policy) GenerateFileName(uid uint, origin string) string {
 		"{hour}":           time.Now().Format("15"),
 		"{minute}":         time.Now().Format("04"),
 		"{second}":         time.Now().Format("05"),
+		"{originname}":     origin,
+		"{ext}":            filepath.Ext(origin),
+		"{uuid}":           uuid.Must(uuid.NewV4()).String(),
 	}
-
-	replaceTable["{originname}"] = policy.getOriginNameRule(origin)
 
 	fileRule = util.Replace(replaceTable, fileRule)
 	return fileRule
-}
-
-func (policy Policy) getOriginNameRule(origin string) string {
-	// 部分存储策略可以使用{origin}代表原始文件名
-	if origin == "" {
-		// 如果上游未传回原始文件名，则使用占位符，让云存储端替换
-		switch policy.Type {
-		case "qiniu":
-			// 七牛会将$(fname)自动替换为原始文件名
-			return "$(fname)"
-		case "local", "remote":
-			return origin
-		case "oss", "cos":
-			// OSS会将${filename}自动替换为原始文件名
-			return "${filename}"
-		case "upyun":
-			// Upyun会将{filename}{.suffix}自动替换为原始文件名
-			return "{filename}{.suffix}"
-		}
-	}
-	return origin
 }
 
 // IsDirectlyPreview 返回此策略下文件是否可以直接预览（不需要重定向）
@@ -232,18 +221,7 @@ func (policy *Policy) IsThumbExist(name string) bool {
 
 // IsTransitUpload 返回此策略上传给定size文件时是否需要服务端中转
 func (policy *Policy) IsTransitUpload(size uint64) bool {
-	if policy.Type == "local" {
-		return true
-	}
-	if policy.Type == "onedrive" && size < 4*1024*1024 {
-		return true
-	}
-	return false
-}
-
-// IsPathGenerateNeeded 返回此策略是否需要在生成上传凭证时生成存储路径
-func (policy *Policy) IsPathGenerateNeeded() bool {
-	return policy.Type != "remote"
+	return policy.Type == "local"
 }
 
 // IsThumbGenerateNeeded 返回此策略是否需要在上传后生成缩略图
@@ -251,47 +229,34 @@ func (policy *Policy) IsThumbGenerateNeeded() bool {
 	return policy.Type == "local"
 }
 
+// IsUploadPlaceholderWithSize 返回此策略创建上传会话时是否需要预留空间
+func (policy *Policy) IsUploadPlaceholderWithSize() bool {
+	if policy.Type == "remote" {
+		return true
+	}
+
+	if util.ContainsString([]string{"onedrive", "oss", "qiniu", "cos", "s3"}, policy.Type) {
+		return policy.OptionsSerialized.PlaceholderWithSize
+	}
+
+	return false
+}
+
 // CanStructureBeListed 返回存储策略是否能被前台列物理目录
 func (policy *Policy) CanStructureBeListed() bool {
 	return policy.Type != "local" && policy.Type != "remote"
 }
 
-// GetUploadURL 获取文件上传服务API地址
-func (policy *Policy) GetUploadURL() string {
-	server, err := url.Parse(policy.Server)
-	if err != nil {
-		return policy.Server
-	}
-
-	controller, _ := url.Parse("")
-	switch policy.Type {
-	case "local", "onedrive":
-		return "/api/v3/file/upload"
-	case "remote":
-		controller, _ = url.Parse("/api/v3/slave/upload")
-	case "oss":
-		return "https://" + policy.BucketName + "." + policy.Server
-	case "cos":
-		return policy.Server
-	case "upyun":
-		return "https://v0.api.upyun.com/" + policy.BucketName
-	case "s3":
-		if policy.Server == "" {
-			return fmt.Sprintf("https://%s.s3.%s.amazonaws.com/", policy.BucketName,
-				policy.OptionsSerialized.Region)
-		}
-
-		if !strings.Contains(policy.Server, policy.BucketName) {
-			controller, _ = url.Parse("/" + policy.BucketName)
-		}
-	}
-
-	return server.ResolveReference(controller).String()
-}
-
 // SaveAndClearCache 更新并清理缓存
 func (policy *Policy) SaveAndClearCache() error {
 	err := DB.Save(policy).Error
+	policy.ClearCache()
+	return err
+}
+
+// SaveAndClearCache 更新并清理缓存
+func (policy *Policy) UpdateAccessKeyAndClearCache(s string) error {
+	err := DB.Model(policy).UpdateColumn("access_key", s).Error
 	policy.ClearCache()
 	return err
 }

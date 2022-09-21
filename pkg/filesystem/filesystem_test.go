@@ -1,14 +1,17 @@
 package filesystem
 
 import (
+	"github.com/cloudreve/Cloudreve/v3/pkg/cluster"
+	"github.com/cloudreve/Cloudreve/v3/pkg/conf"
+	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/driver/shadow/masterinslave"
+	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/driver/shadow/slaveinmaster"
+	"github.com/cloudreve/Cloudreve/v3/pkg/serializer"
 	"net/http/httptest"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	model "github.com/cloudreve/Cloudreve/v3/models"
-	"github.com/cloudreve/Cloudreve/v3/pkg/cache"
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/driver/local"
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/driver/remote"
-	"github.com/cloudreve/Cloudreve/v3/pkg/serializer"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 
@@ -33,7 +36,7 @@ func TestNewFileSystem(t *testing.T) {
 	fs, err = NewFileSystem(&user)
 	asserts.NoError(err)
 	asserts.NotNil(fs.Handler)
-	asserts.IsType(remote.Driver{}, fs.Handler)
+	asserts.IsType(&remote.Driver{}, fs.Handler)
 
 	user.Policy.Type = "unknown"
 	fs, err = NewFileSystem(&user)
@@ -61,9 +64,10 @@ func TestNewFileSystemFromContext(t *testing.T) {
 func TestDispatchHandler(t *testing.T) {
 	asserts := assert.New(t)
 	fs := &FileSystem{
-		User: &model.User{Policy: model.Policy{
+		User: &model.User{},
+		Policy: &model.Policy{
 			Type: "local",
-		}},
+		},
 	}
 
 	// 未指定，使用用户默认
@@ -92,7 +96,7 @@ func TestDispatchHandler(t *testing.T) {
 	err = fs.DispatchHandler()
 	asserts.NoError(err)
 
-	fs.Policy = &model.Policy{Type: "oss"}
+	fs.Policy = &model.Policy{Type: "oss", Server: "https://s.com", BucketName: "1234"}
 	err = fs.DispatchHandler()
 	asserts.NoError(err)
 
@@ -101,6 +105,10 @@ func TestDispatchHandler(t *testing.T) {
 	asserts.NoError(err)
 
 	fs.Policy = &model.Policy{Type: "onedrive"}
+	err = fs.DispatchHandler()
+	asserts.NoError(err)
+
+	fs.Policy = &model.Policy{Type: "cos"}
 	err = fs.DispatchHandler()
 	asserts.NoError(err)
 
@@ -133,23 +141,6 @@ func TestNewFileSystemFromCallback(t *testing.T) {
 		asserts.Error(err)
 	}
 
-	// 找不到上传策略
-	{
-		c, _ := gin.CreateTestContext(httptest.NewRecorder())
-		c.Set("user", &model.User{
-			Policy: model.Policy{
-				Type: "local",
-			},
-		})
-		c.Set("callbackSession", &serializer.UploadSession{PolicyID: 138})
-		cache.Deletes([]string{"138"}, "policy_")
-		mock.ExpectQuery("SELECT(.+)").WillReturnRows(sqlmock.NewRows([]string{"id"}))
-		fs, err := NewFileSystemFromCallback(c)
-		asserts.NoError(mock.ExpectationsWereMet())
-		asserts.Nil(fs)
-		asserts.Error(err)
-	}
-
 	// 成功
 	{
 		c, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -158,11 +149,8 @@ func TestNewFileSystemFromCallback(t *testing.T) {
 				Type: "local",
 			},
 		})
-		c.Set("callbackSession", &serializer.UploadSession{PolicyID: 138})
-		cache.Deletes([]string{"138"}, "policy_")
-		mock.ExpectQuery("SELECT(.+)").WillReturnRows(sqlmock.NewRows([]string{"id", "type", "options"}).AddRow(138, "local", "{}"))
+		c.Set(UploadSessionCtx, &serializer.UploadSession{Policy: model.Policy{Type: "local"}})
 		fs, err := NewFileSystemFromCallback(c)
-		asserts.NoError(mock.ExpectationsWereMet())
 		asserts.NotNil(fs)
 		asserts.NoError(err)
 	}
@@ -227,6 +215,16 @@ func TestNewAnonymousFileSystem(t *testing.T) {
 		asserts.Error(err)
 		asserts.Nil(fs)
 	}
+
+	// 从机
+	{
+		conf.SystemConfig.Mode = "slave"
+		fs, err := NewAnonymousFileSystem()
+		asserts.NoError(mock.ExpectationsWereMet())
+		asserts.NoError(err)
+		asserts.NotNil(fs)
+		asserts.NotNil(fs.Handler)
+	}
 }
 
 func TestFileSystem_Recycle(t *testing.T) {
@@ -260,5 +258,42 @@ func TestFileSystem_SetTargetByInterface(t *testing.T) {
 		asserts.NoError(fs.SetTargetByInterface(&model.File{}))
 		asserts.Len(fs.DirTarget, 1)
 		asserts.Len(fs.FileTarget, 1)
+	}
+}
+
+func TestFileSystem_SwitchToSlaveHandler(t *testing.T) {
+	a := assert.New(t)
+	fs := FileSystem{
+		User: &model.User{},
+	}
+	mockNode := &cluster.MasterNode{
+		Model: &model.Node{},
+	}
+	fs.SwitchToSlaveHandler(mockNode)
+	a.IsType(&slaveinmaster.Driver{}, fs.Handler)
+}
+
+func TestFileSystem_SwitchToShadowHandler(t *testing.T) {
+	a := assert.New(t)
+	fs := FileSystem{
+		User:   &model.User{},
+		Policy: &model.Policy{},
+	}
+	mockNode := &cluster.MasterNode{
+		Model: &model.Node{},
+	}
+
+	// local to remote
+	{
+		fs.Policy.Type = "local"
+		fs.SwitchToShadowHandler(mockNode, "", "")
+		a.IsType(&masterinslave.Driver{}, fs.Handler)
+	}
+
+	// onedrive
+	{
+		fs.Policy.Type = "onedrive"
+		fs.SwitchToShadowHandler(mockNode, "", "")
+		a.IsType(&masterinslave.Driver{}, fs.Handler)
 	}
 }

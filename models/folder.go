@@ -23,10 +23,12 @@ type Folder struct {
 
 // Create 创建目录
 func (folder *Folder) Create() (uint, error) {
-	if err := DB.Create(folder).Error; err != nil {
-		util.Log().Warning("无法插入目录记录, %s", err)
-		return 0, err
+	if err := DB.FirstOrCreate(folder, *folder).Error; err != nil {
+		folder.Model = gorm.Model{}
+		err2 := DB.First(folder, *folder).Error
+		return folder.ID, err2
 	}
+
 	return folder.ID, nil
 }
 
@@ -312,6 +314,11 @@ func (folder *Folder) MoveOrCopyFileTo(files []uint, dstFolder *Folder, isCopy b
 
 		// 复制文件记录
 		for _, oldFile := range originFiles {
+			if !oldFile.CanCopy() {
+				util.Log().Warning("无法复制正在上传中的文件 [%s]， 跳过...", oldFile.Name)
+				continue
+			}
+
 			oldFile.Model = gorm.Model{}
 			oldFile.FolderID = dstFolder.ID
 			oldFile.UserID = dstFolder.OwnerID
@@ -400,6 +407,11 @@ func (folder *Folder) CopyFolderTo(folderID uint, dstFolder *Folder) (size uint6
 
 	// 复制文件记录
 	for _, oldFile := range originFiles {
+		if !oldFile.CanCopy() {
+			util.Log().Warning("无法复制正在上传中的文件 [%s]， 跳过...", oldFile.Name)
+			continue
+		}
+
 		oldFile.Model = gorm.Model{}
 		oldFile.FolderID = newIDCache[oldFile.FolderID]
 		oldFile.UserID = dstFolder.OwnerID
@@ -417,6 +429,13 @@ func (folder *Folder) CopyFolderTo(folderID uint, dstFolder *Folder) (size uint6
 // MoveFolderTo 将folder目录下的dirs子目录复制或移动到dstFolder，
 // 返回此过程中增加的容量
 func (folder *Folder) MoveFolderTo(dirs []uint, dstFolder *Folder) error {
+
+	// 如果目标位置为待移动的目录，会导致 parent 为自己
+	// 造成死循环且无法被除搜索以外的组件展示
+	if folder.OwnerID == dstFolder.OwnerID && util.ContainsUint(dirs, dstFolder.ID) {
+		return errors.New("cannot move a folder into itself")
+	}
+
 	// 更改顶级要移动目录的父目录指向
 	err := DB.Model(Folder{}).Where(
 		"id in (?) and owner_id = ? and parent_id = ?",
@@ -433,10 +452,7 @@ func (folder *Folder) MoveFolderTo(dirs []uint, dstFolder *Folder) error {
 
 // Rename 重命名目录
 func (folder *Folder) Rename(new string) error {
-	if err := DB.Model(&folder).Update("name", new).Error; err != nil {
-		return err
-	}
-	return nil
+	return DB.Model(&folder).UpdateColumn("name", new).Error
 }
 
 /*

@@ -14,7 +14,7 @@ type Group struct {
 	ShareEnabled  bool
 	WebDAVEnabled bool
 	SpeedLimit    int
-	Options       string `json:"-",gorm:"type:text"`
+	Options       string `json:"-" gorm:"size:4294967295"`
 
 	// 数据库忽略字段
 	PolicyList        []uint      `gorm:"-"`
@@ -31,6 +31,8 @@ type GroupOption struct {
 	ShareDownload   bool                   `json:"share_download,omitempty"`
 	Aria2           bool                   `json:"aria2,omitempty"`         // 离线下载
 	Aria2Options    map[string]interface{} `json:"aria2_options,omitempty"` // 离线下载用户组配置
+	SourceBatchSize int                    `json:"source_batch,omitempty"`
+	Aria2BatchSize  int                    `json:"aria2_batch,omitempty"`
 }
 
 // GetGroupByID 用ID获取用户组

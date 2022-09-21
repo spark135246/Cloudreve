@@ -3,7 +3,7 @@ package controllers
 import (
 	"context"
 
-	ariaCall "github.com/cloudreve/Cloudreve/v3/pkg/aria2"
+	"github.com/cloudreve/Cloudreve/v3/pkg/aria2/common"
 	"github.com/cloudreve/Cloudreve/v3/service/aria2"
 	"github.com/cloudreve/Cloudreve/v3/service/explorer"
 	"github.com/gin-gonic/gin"
@@ -11,9 +11,9 @@ import (
 
 // AddAria2URL 添加离线下载URL
 func AddAria2URL(c *gin.Context) {
-	var addService aria2.AddURLService
+	var addService aria2.BatchAddURLService
 	if err := c.ShouldBindJSON(&addService); err == nil {
-		res := addService.Add(c, ariaCall.URLTask)
+		res := addService.Add(c, common.URLTask)
 		c.JSON(200, res)
 	} else {
 		c.JSON(200, ErrorResponse(err))
@@ -52,7 +52,7 @@ func AddAria2Torrent(c *gin.Context) {
 
 		if err := c.ShouldBindJSON(&addService); err == nil {
 			addService.URL = res.Data.(string)
-			res := addService.Add(c, ariaCall.URLTask)
+			res := addService.Add(c, nil, common.URLTask)
 			c.JSON(200, res)
 		} else {
 			c.JSON(200, ErrorResponse(err))

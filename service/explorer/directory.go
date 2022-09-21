@@ -9,7 +9,6 @@ import (
 	"regexp"
 
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem"
-	"github.com/cloudreve/Cloudreve/v3/pkg/hashid"
 	"github.com/cloudreve/Cloudreve/v3/pkg/serializer"
 	"github.com/gin-gonic/gin"
 )
@@ -24,7 +23,7 @@ func (service *DirectoryService) ListDirectory(c *gin.Context) serializer.Respon
 	// 创建文件系统
 	fs, err := filesystem.NewFileSystemFromContext(c)
 	if err != nil {
-		return serializer.Err(serializer.CodePolicyNotAllowed, err.Error(), err)
+		return serializer.Err(serializer.CodeCreateFSError, "", err)
 	}
 	defer fs.Recycle()
 
@@ -131,10 +130,7 @@ func (service *DirectoryService) ListDirectory(c *gin.Context) serializer.Respon
 
 	return serializer.Response{
 		Code: 0,
-		Data: map[string]interface{}{
-			"parent":  hashid.HashID(parentID, hashid.FolderID),
-			"objects": objects,
-		},
+		Data: serializer.BuildObjectList(parentID, objects, fs.Policy),
 	}
 }
 
@@ -143,7 +139,7 @@ func (service *DirectoryService) CreateDirectory(c *gin.Context) serializer.Resp
 	// 创建文件系统
 	fs, err := filesystem.NewFileSystemFromContext(c)
 	if err != nil {
-		return serializer.Err(serializer.CodePolicyNotAllowed, err.Error(), err)
+		return serializer.Err(serializer.CodeCreateFSError, "", err)
 	}
 	defer fs.Recycle()
 

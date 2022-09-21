@@ -2,10 +2,11 @@ package filesystem
 
 import (
 	"context"
-
+	"fmt"
 	"io"
 
 	model "github.com/cloudreve/Cloudreve/v3/models"
+	"github.com/cloudreve/Cloudreve/v3/pkg/cache"
 	"github.com/cloudreve/Cloudreve/v3/pkg/conf"
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/fsctx"
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/response"
@@ -45,41 +46,39 @@ func (fs *FileSystem) withSpeedLimit(rs response.RSCloser) response.RSCloser {
 }
 
 // AddFile 新增文件记录
-func (fs *FileSystem) AddFile(ctx context.Context, parent *model.Folder) (*model.File, error) {
+func (fs *FileSystem) AddFile(ctx context.Context, parent *model.Folder, file fsctx.FileHeader) (*model.File, error) {
 	// 添加文件记录前的钩子
-	err := fs.Trigger(ctx, "BeforeAddFile")
+	err := fs.Trigger(ctx, "BeforeAddFile", file)
 	if err != nil {
-		if err := fs.Trigger(ctx, "BeforeAddFileFailed"); err != nil {
-			util.Log().Debug("BeforeAddFileFailed 钩子执行失败，%s", err)
-		}
 		return nil, err
 	}
 
-	file := ctx.Value(fsctx.FileHeaderCtx).(FileHeader)
-	filePath := ctx.Value(fsctx.SavePathCtx).(string)
-
+	uploadInfo := file.Info()
 	newFile := model.File{
-		Name:       file.GetFileName(),
-		SourceName: filePath,
-		UserID:     fs.User.ID,
-		Size:       file.GetSize(),
-		FolderID:   parent.ID,
-		PolicyID:   fs.User.Policy.ID,
+		Name:               uploadInfo.FileName,
+		SourceName:         uploadInfo.SavePath,
+		UserID:             fs.User.ID,
+		Size:               uploadInfo.Size,
+		FolderID:           parent.ID,
+		PolicyID:           fs.Policy.ID,
+		MetadataSerialized: uploadInfo.Metadata,
+		UploadSessionID:    uploadInfo.UploadSessionID,
 	}
 
-	if fs.User.Policy.IsThumbExist(file.GetFileName()) {
+	if fs.Policy.IsThumbExist(uploadInfo.FileName) {
 		newFile.PicInfo = "1,1"
 	}
 
-	_, err = newFile.Create()
+	err = newFile.Create()
 
 	if err != nil {
-		if err := fs.Trigger(ctx, "AfterValidateFailed"); err != nil {
+		if err := fs.Trigger(ctx, "AfterValidateFailed", file); err != nil {
 			util.Log().Debug("AfterValidateFailed 钩子执行失败，%s", err)
 		}
 		return nil, ErrFileExisted.WithError(err)
 	}
 
+	fs.User.Storage += newFile.Size
 	return &newFile, nil
 }
 
@@ -138,9 +137,10 @@ func (fs *FileSystem) GetPhysicalFileContent(ctx context.Context, path string) (
 }
 
 // Preview 预览文件
-//   path   -   文件虚拟路径
-//   isText -   是否为文本文件，文本文件会忽略重定向，直接由
-//              服务端拉取中转给用户，故会对文件大小进行限制
+//
+//	path   -   文件虚拟路径
+//	isText -   是否为文本文件，文本文件会忽略重定向，直接由
+//	           服务端拉取中转给用户，故会对文件大小进行限制
 func (fs *FileSystem) Preview(ctx context.Context, id uint, isText bool) (*response.ContentResponse, error) {
 	err := fs.resetFileIDIfNotExist(ctx, id)
 	if err != nil {
@@ -194,14 +194,7 @@ func (fs *FileSystem) GetDownloadContent(ctx context.Context, id uint) (response
 
 // GetContent 获取文件内容，path为虚拟路径
 func (fs *FileSystem) GetContent(ctx context.Context, id uint) (response.RSCloser, error) {
-	// 触发`下载前`钩子
-	err := fs.Trigger(ctx, "BeforeFileDownload")
-	if err != nil {
-		util.Log().Debug("BeforeFileDownload 钩子执行失败，%s", err)
-		return nil, err
-	}
-
-	err = fs.resetFileIDIfNotExist(ctx, id)
+	err := fs.resetFileIDIfNotExist(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -225,23 +218,41 @@ func (fs *FileSystem) deleteGroupedFile(ctx context.Context, files map[uint][]*m
 
 	for policyID, toBeDeletedFiles := range files {
 		// 列举出需要物理删除的文件的物理路径
-		sourceNames := make([]string, 0, len(toBeDeletedFiles))
+		sourceNamesAll := make([]string, 0, len(toBeDeletedFiles))
+		uploadSessions := make([]*serializer.UploadSession, 0, len(toBeDeletedFiles))
+
 		for i := 0; i < len(toBeDeletedFiles); i++ {
-			sourceNames = append(sourceNames, toBeDeletedFiles[i].SourceName)
+			sourceNamesAll = append(sourceNamesAll, toBeDeletedFiles[i].SourceName)
+
+			if toBeDeletedFiles[i].UploadSessionID != nil {
+				if session, ok := cache.Get(UploadSessionCachePrefix + *toBeDeletedFiles[i].UploadSessionID); ok {
+					uploadSession := session.(serializer.UploadSession)
+					uploadSessions = append(uploadSessions, &uploadSession)
+				}
+
+			}
 		}
 
 		// 切换上传策略
 		fs.Policy = toBeDeletedFiles[0].GetPolicy()
 		err := fs.DispatchHandler()
 		if err != nil {
-			failed[policyID] = sourceNames
+			failed[policyID] = sourceNamesAll
 			continue
 		}
 
-		// 执行删除
-		failedFile, _ := fs.Handler.Delete(ctx, sourceNames)
-		failed[policyID] = failedFile
+		// 取消上传会话
+		for _, upSession := range uploadSessions {
+			if err := fs.Handler.CancelToken(ctx, upSession); err != nil {
+				util.Log().Warning("无法取消 [%s] 的上传会话: %s", upSession.Name, err)
+			}
 
+			cache.Deletes([]string{upSession.Key}, UploadSessionCachePrefix)
+		}
+
+		// 执行删除
+		failedFile, _ := fs.Handler.Delete(ctx, sourceNamesAll)
+		failed[policyID] = failedFile
 	}
 
 	return failed
@@ -256,7 +267,7 @@ func (fs *FileSystem) GroupFileByPolicy(ctx context.Context, files []model.File)
 			// 如果已存在分组，直接追加
 			policyGroup[files[key].PolicyID] = append(file, &files[key])
 		} else {
-			// 分布不存在，创建
+			// 分组不存在，创建
 			policyGroup[files[key].PolicyID] = make([]*model.File, 0)
 			policyGroup[files[key].PolicyID] = append(policyGroup[files[key].PolicyID], &files[key])
 		}
@@ -391,8 +402,22 @@ func (fs *FileSystem) resetPolicyToFirstFile(ctx context.Context) error {
 }
 
 // Search 搜索文件
-func (fs *FileSystem) Search(ctx context.Context, keywords ...interface{}) ([]Object, error) {
-	files, _ := model.GetFilesByKeywords(fs.User.ID, keywords...)
+func (fs *FileSystem) Search(ctx context.Context, keywords ...interface{}) ([]serializer.Object, error) {
+	parents := make([]uint, 0)
+
+	// 如果限定了根目录，则只在这个根目录下搜索。
+	if fs.Root != nil {
+		allFolders, err := model.GetRecursiveChildFolder([]uint{fs.Root.ID}, fs.User.ID, true)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list all folders: %w", err)
+		}
+
+		for _, folder := range allFolders {
+			parents = append(parents, folder.ID)
+		}
+	}
+
+	files, _ := model.GetFilesByKeywords(fs.User.ID, parents, keywords...)
 	fs.SetTargetFile(&files)
 
 	return fs.listObjects(ctx, "/", files, nil, nil), nil

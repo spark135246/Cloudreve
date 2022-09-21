@@ -3,12 +3,13 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"path"
+
+	"github.com/HFO4/cloudreve/pkg/filesystem/driver/local"
 	model "github.com/cloudreve/Cloudreve/v3/models"
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem"
-	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/driver/local"
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/fsctx"
 	"github.com/cloudreve/Cloudreve/v3/pkg/util"
-	"path"
 )
 
 // ImportTask 导入务
@@ -227,6 +228,12 @@ func (job *ImportTask) Do() {
 		fs.Tx = nil
 	}()
 
+	fs.Policy = &policy
+	if err := fs.DispatchHandler(); err != nil {
+		job.SetErrorMsg("无法分发存储策略", err)
+		return
+	}
+
 	// 注册钩子
 	fs.Use("BeforeAddFile", filesystem.HookValidateFile)
 	fs.Use("BeforeAddFile", filesystem.HookValidateThumbnailExtension)
@@ -268,13 +275,12 @@ func (job *ImportTask) Do() {
 		if !object.IsDir {
 			// 创建文件信息
 			virtualPath := path.Dir(path.Join(job.TaskProps.Dst, object.RelativePath))
-			fileHeader := local.FileStream{
+			fileHeader := fsctx.FileStream{
 				Size:        object.Size,
 				VirtualPath: virtualPath,
 				Name:        object.Name,
+				SavePath:    object.Source,
 			}
-			addFileCtx := context.WithValue(ctx, fsctx.FileHeaderCtx, fileHeader)
-			addFileCtx = context.WithValue(addFileCtx, fsctx.SavePathCtx, object.Source)
 
 			// 查找父目录
 			parentFolder := &model.Folder{}
@@ -293,6 +299,8 @@ func (job *ImportTask) Do() {
 					}
 					parentFolder = folder
 				}
+				parentFolder = folder
+
 			}
 
 			// 插入文件记录

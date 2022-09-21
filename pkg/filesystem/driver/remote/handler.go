@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"path"
 	"strings"
@@ -26,10 +24,28 @@ type Driver struct {
 	Client       request.Client
 	Policy       *model.Policy
 	AuthInstance auth.Auth
+
+	uploadClient Client
+}
+
+// NewDriver initializes a new Driver from policy
+// TODO: refactor all method into upload client
+func NewDriver(policy *model.Policy) (*Driver, error) {
+	client, err := NewClient(policy)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Driver{
+		Policy:       policy,
+		Client:       request.NewClient(),
+		AuthInstance: auth.HMACAuth{[]byte(policy.SecretKey)},
+		uploadClient: client,
+	}, nil
 }
 
 // List 列取文件
-func (handler Driver) List(ctx context.Context, path string, recursive bool) ([]response.Object, error) {
+func (handler *Driver) List(ctx context.Context, path string, recursive bool) ([]response.Object, error) {
 	var res []response.Object
 
 	reqBody := serializer.ListRequest{
@@ -49,6 +65,7 @@ func (handler Driver) List(ctx context.Context, path string, recursive bool) ([]
 		handler.getAPIUrl("list"),
 		bodyReader,
 		request.WithCredential(handler.AuthInstance, int64(signTTL)),
+		request.WithMasterMeta(),
 	).CheckHTTPResponse(200).DecodeResponse()
 	if err != nil {
 		return res, err
@@ -70,7 +87,7 @@ func (handler Driver) List(ctx context.Context, path string, recursive bool) ([]
 }
 
 // getAPIUrl 获取接口请求地址
-func (handler Driver) getAPIUrl(scope string, routes ...string) string {
+func (handler *Driver) getAPIUrl(scope string, routes ...string) string {
 	serverURL, err := url.Parse(handler.Policy.Server)
 	if err != nil {
 		return ""
@@ -96,8 +113,8 @@ func (handler Driver) getAPIUrl(scope string, routes ...string) string {
 }
 
 // Get 获取文件内容
-func (handler Driver) Get(ctx context.Context, path string) (response.RSCloser, error) {
-	// 尝试获取速度限制 TODO 是否需要在这里限制？
+func (handler *Driver) Get(ctx context.Context, path string) (response.RSCloser, error) {
+	// 尝试获取速度限制
 	speedLimit := 0
 	if user, ok := ctx.Value(fsctx.UserCtx).(model.User); ok {
 		speedLimit = user.Group.SpeedLimit
@@ -116,6 +133,7 @@ func (handler Driver) Get(ctx context.Context, path string) (response.RSCloser, 
 		nil,
 		request.WithContext(ctx),
 		request.WithTimeout(time.Duration(0)),
+		request.WithMasterMeta(),
 	).CheckHTTPResponse(200).GetRSCloser()
 	if err != nil {
 		return nil, err
@@ -132,58 +150,10 @@ func (handler Driver) Get(ctx context.Context, path string) (response.RSCloser, 
 }
 
 // Put 将文件流保存到指定目录
-func (handler Driver) Put(ctx context.Context, file io.ReadCloser, dst string, size uint64) error {
+func (handler *Driver) Put(ctx context.Context, file fsctx.FileHeader) error {
 	defer file.Close()
 
-	// 凭证有效期
-	credentialTTL := model.GetIntSetting("upload_credential_timeout", 3600)
-
-	// 生成上传策略
-	policy := serializer.UploadPolicy{
-		SavePath:   path.Dir(dst),
-		FileName:   path.Base(dst),
-		AutoRename: false,
-		MaxSize:    size,
-	}
-	credential, err := handler.getUploadCredential(ctx, policy, int64(credentialTTL))
-	if err != nil {
-		return err
-	}
-
-	// 对文件名进行URLEncode
-	fileName, err := url.QueryUnescape(path.Base(dst))
-	if err != nil {
-		return err
-	}
-
-	// 决定是否要禁用文件覆盖
-	overwrite := "true"
-	if ctx.Value(fsctx.DisableOverwrite) != nil {
-		overwrite = "false"
-	}
-
-	// 上传文件
-	resp, err := handler.Client.Request(
-		"POST",
-		handler.Policy.GetUploadURL(),
-		file,
-		request.WithHeader(map[string][]string{
-			"Authorization": {credential.Token},
-			"X-Policy":      {credential.Policy},
-			"X-FileName":    {fileName},
-			"X-Overwrite":   {overwrite},
-		}),
-		request.WithContentLength(int64(size)),
-		request.WithTimeout(time.Duration(0)),
-	).CheckHTTPResponse(200).DecodeResponse()
-	if err != nil {
-		return err
-	}
-	if resp.Code != 0 {
-		return errors.New(resp.Msg)
-	}
-
-	return nil
+	return handler.uploadClient.Upload(ctx, file)
 }
 
 func (handler Driver) Move(ctx context.Context, file io.ReadCloser, dst string, size uint64, srcPath string) error {
@@ -192,7 +162,7 @@ func (handler Driver) Move(ctx context.Context, file io.ReadCloser, dst string, 
 
 // Delete 删除一个或多个文件，
 // 返回未删除的文件，及遇到的最后一个错误
-func (handler Driver) Delete(ctx context.Context, files []string) ([]string, error) {
+func (handler *Driver) Delete(ctx context.Context, files []string) ([]string, error) {
 	// 封装接口请求正文
 	reqBody := serializer.RemoteDeleteRequest{
 		Files: files,
@@ -210,6 +180,8 @@ func (handler Driver) Delete(ctx context.Context, files []string) ([]string, err
 		handler.getAPIUrl("delete"),
 		bodyReader,
 		request.WithCredential(handler.AuthInstance, int64(signTTL)),
+		request.WithMasterMeta(),
+		request.WithSlaveMeta(handler.Policy.AccessKey),
 	).CheckHTTPResponse(200).GetResponse()
 	if err != nil {
 		return files, err
@@ -236,7 +208,7 @@ func (handler Driver) Delete(ctx context.Context, files []string) ([]string, err
 }
 
 // Thumb 获取文件缩略图
-func (handler Driver) Thumb(ctx context.Context, path string) (*response.ContentResponse, error) {
+func (handler *Driver) Thumb(ctx context.Context, path string) (*response.ContentResponse, error) {
 	sourcePath := base64.RawURLEncoding.EncodeToString([]byte(path))
 	thumbURL := handler.getAPIUrl("thumb") + "/" + sourcePath
 	ttl := model.GetIntSetting("preview_timeout", 60)
@@ -252,7 +224,7 @@ func (handler Driver) Thumb(ctx context.Context, path string) (*response.Content
 }
 
 // Source 获取外链URL
-func (handler Driver) Source(
+func (handler *Driver) Source(
 	ctx context.Context,
 	path string,
 	baseURL url.URL,
@@ -292,7 +264,7 @@ func (handler Driver) Source(
 	sourcePath := base64.RawURLEncoding.EncodeToString([]byte(path))
 	signedURI, err = auth.SignURI(
 		handler.AuthInstance,
-		fmt.Sprintf("%s/%d/%s/%s", controller, speed, sourcePath, fileName),
+		fmt.Sprintf("%s/%d/%s/%s", controller, speed, sourcePath, url.PathEscape(fileName)),
 		ttl,
 	)
 
@@ -306,43 +278,32 @@ func (handler Driver) Source(
 }
 
 // Token 获取上传策略和认证Token
-func (handler Driver) Token(ctx context.Context, TTL int64, key string) (serializer.UploadCredential, error) {
-	// 生成回调地址
+func (handler *Driver) Token(ctx context.Context, ttl int64, uploadSession *serializer.UploadSession, file fsctx.FileHeader) (*serializer.UploadCredential, error) {
 	siteURL := model.GetSiteURL()
-	apiBaseURI, _ := url.Parse("/api/v3/callback/remote/" + key)
+	apiBaseURI, _ := url.Parse(path.Join("/api/v3/callback/remote", uploadSession.Key, uploadSession.CallbackSecret))
 	apiURL := siteURL.ResolveReference(apiBaseURI)
 
-	// 生成上传策略
-	policy := serializer.UploadPolicy{
-		SavePath:         handler.Policy.DirNameRule,
-		FileName:         handler.Policy.FileNameRule,
-		AutoRename:       handler.Policy.AutoRename,
-		MaxSize:          handler.Policy.MaxSize,
-		AllowedExtension: handler.Policy.OptionsSerialized.FileType,
-		CallbackURL:      apiURL.String(),
+	// 在从机端创建上传会话
+	uploadSession.Callback = apiURL.String()
+	if err := handler.uploadClient.CreateUploadSession(ctx, uploadSession, ttl, false); err != nil {
+		return nil, err
 	}
-	return handler.getUploadCredential(ctx, policy, TTL)
+
+	// 获取上传地址
+	uploadURL, sign, err := handler.uploadClient.GetUploadURL(ttl, uploadSession.Key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign upload url: %w", err)
+	}
+
+	return &serializer.UploadCredential{
+		SessionID:  uploadSession.Key,
+		ChunkSize:  handler.Policy.OptionsSerialized.ChunkSize,
+		UploadURLs: []string{uploadURL},
+		Credential: sign,
+	}, nil
 }
 
-func (handler Driver) getUploadCredential(ctx context.Context, policy serializer.UploadPolicy, TTL int64) (serializer.UploadCredential, error) {
-	policyEncoded, err := policy.EncodeUploadPolicy()
-	if err != nil {
-		return serializer.UploadCredential{}, err
-	}
-
-	// 签名上传策略
-	uploadRequest, _ := http.NewRequest("POST", "/api/v3/slave/upload", nil)
-	uploadRequest.Header = map[string][]string{
-		"X-Policy":    {policyEncoded},
-		"X-Overwrite": {"false"},
-	}
-	auth.SignRequest(handler.AuthInstance, uploadRequest, TTL)
-
-	if credential, ok := uploadRequest.Header["Authorization"]; ok && len(credential) == 1 {
-		return serializer.UploadCredential{
-			Token:  credential[0],
-			Policy: policyEncoded,
-		}, nil
-	}
-	return serializer.UploadCredential{}, errors.New("无法签名上传策略")
+// 取消上传凭证
+func (handler *Driver) CancelToken(ctx context.Context, uploadSession *serializer.UploadSession) error {
+	return handler.uploadClient.DeleteUploadSession(ctx, uploadSession.Key)
 }

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -58,12 +59,12 @@ type PolicyService struct {
 func (service *PolicyService) Delete() serializer.Response {
 	// 禁止删除默认策略
 	if service.ID == 1 {
-		return serializer.Err(serializer.CodeNoPermissionErr, "默认存储策略无法删除", nil)
+		return serializer.Err(serializer.CodeDeleteDefaultPolicy, "", nil)
 	}
 
 	policy, err := model.GetPolicyByID(service.ID)
 	if err != nil {
-		return serializer.Err(serializer.CodeNotFound, "存储策略不存在", err)
+		return serializer.Err(serializer.CodePolicyNotExist, "", err)
 	}
 
 	// 检查是否有文件使用
@@ -72,7 +73,7 @@ func (service *PolicyService) Delete() serializer.Response {
 		Select("count(id)").Row()
 	row.Scan(&total)
 	if total > 0 {
-		return serializer.ParamErr(fmt.Sprintf("有 %d 个文件仍在使用此存储策略，请先删除这些文件", total), nil)
+		return serializer.Err(serializer.CodePolicyUsedByFiles, strconv.Itoa(total), nil)
 	}
 
 	// 检查用户组使用
@@ -83,7 +84,7 @@ func (service *PolicyService) Delete() serializer.Response {
 	).Find(&groups)
 
 	if len(groups) > 0 {
-		return serializer.ParamErr(fmt.Sprintf("有 %d 个用户组绑定了此存储策略，请先解除绑定", len(groups)), nil)
+		return serializer.Err(serializer.CodePolicyUsedByGroups, strconv.Itoa(len(groups)), nil)
 	}
 
 	model.DB.Delete(&policy)
@@ -96,7 +97,7 @@ func (service *PolicyService) Delete() serializer.Response {
 func (service *PolicyService) Get() serializer.Response {
 	policy, err := model.GetPolicyByID(service.ID)
 	if err != nil {
-		return serializer.Err(serializer.CodeNotFound, "存储策略不存在", err)
+		return serializer.Err(serializer.CodePolicyNotExist, "", err)
 	}
 
 	return serializer.Response{Data: policy}
@@ -106,12 +107,12 @@ func (service *PolicyService) Get() serializer.Response {
 func (service *PolicyService) GetOAuth(c *gin.Context) serializer.Response {
 	policy, err := model.GetPolicyByID(service.ID)
 	if err != nil || policy.Type != "onedrive" {
-		return serializer.Err(serializer.CodeNotFound, "存储策略不存在", nil)
+		return serializer.Err(serializer.CodePolicyNotExist, "", nil)
 	}
 
 	client, err := onedrive.NewClient(&policy)
 	if err != nil {
-		return serializer.Err(serializer.CodeInternalSetting, "无法初始化 OneDrive 客户端", err)
+		return serializer.Err(serializer.CodeInternalSetting, "Failed to initialize OneDrive client", err)
 	}
 
 	util.SetSession(c, map[string]interface{}{
@@ -130,11 +131,11 @@ func (service *PolicyService) GetOAuth(c *gin.Context) serializer.Response {
 func (service *PolicyService) AddSCF() serializer.Response {
 	policy, err := model.GetPolicyByID(service.ID)
 	if err != nil {
-		return serializer.Err(serializer.CodeNotFound, "存储策略不存在", nil)
+		return serializer.Err(serializer.CodePolicyNotExist, "", nil)
 	}
 
 	if err := cos.CreateSCF(&policy, service.Region); err != nil {
-		return serializer.Err(serializer.CodeInternalSetting, "云函数创建失败", err)
+		return serializer.ParamErr("Failed to create SCF function", err)
 	}
 
 	return serializer.Response{}
@@ -144,24 +145,24 @@ func (service *PolicyService) AddSCF() serializer.Response {
 func (service *PolicyService) AddCORS() serializer.Response {
 	policy, err := model.GetPolicyByID(service.ID)
 	if err != nil {
-		return serializer.Err(serializer.CodeNotFound, "存储策略不存在", nil)
+		return serializer.Err(serializer.CodePolicyNotExist, "", nil)
 	}
 
 	switch policy.Type {
 	case "oss":
-		handler := oss.Driver{
-			Policy:     &policy,
-			HTTPClient: request.HTTPClient{},
+		handler, err := oss.NewDriver(&policy)
+		if err != nil {
+			return serializer.Err(serializer.CodeAddCORS, "", err)
 		}
 		if err := handler.CORS(); err != nil {
-			return serializer.Err(serializer.CodeInternalSetting, "跨域策略添加失败", err)
+			return serializer.Err(serializer.CodeAddCORS, "", err)
 		}
 	case "cos":
 		u, _ := url.Parse(policy.Server)
 		b := &cossdk.BaseURL{BucketURL: u}
 		handler := cos.Driver{
 			Policy:     &policy,
-			HTTPClient: request.HTTPClient{},
+			HTTPClient: request.NewClient(),
 			Client: cossdk.NewClient(b, &http.Client{
 				Transport: &cossdk.AuthorizationTransport{
 					SecretID:  policy.AccessKey,
@@ -169,18 +170,21 @@ func (service *PolicyService) AddCORS() serializer.Response {
 				},
 			}),
 		}
+
 		if err := handler.CORS(); err != nil {
-			return serializer.Err(serializer.CodeInternalSetting, "跨域策略添加失败", err)
+			return serializer.Err(serializer.CodeAddCORS, "", err)
 		}
 	case "s3":
-		handler := s3.Driver{
-			Policy: &policy,
+		handler, err := s3.NewDriver(&policy)
+		if err != nil {
+			return serializer.Err(serializer.CodeAddCORS, "", err)
 		}
+
 		if err := handler.CORS(); err != nil {
-			return serializer.Err(serializer.CodeInternalSetting, "跨域策略添加失败", err)
+			return serializer.Err(serializer.CodeAddCORS, "", err)
 		}
 	default:
-		return serializer.ParamErr("不支持此策略", nil)
+		return serializer.Err(serializer.CodePolicyNotAllowed, "", nil)
 	}
 
 	return serializer.Response{}
@@ -190,12 +194,12 @@ func (service *PolicyService) AddCORS() serializer.Response {
 func (service *SlavePingService) Test() serializer.Response {
 	master, err := url.Parse(service.Callback)
 	if err != nil {
-		return serializer.ParamErr("无法解析主机站点地址，请检查主机 参数设置 - 站点信息 - 站点URL设置，"+err.Error(), nil)
+		return serializer.ParamErr("Failed to parse Master site url: "+err.Error(), nil)
 	}
 
 	controller, _ := url.Parse("/api/v3/site/ping")
 
-	r := request.HTTPClient{}
+	r := request.NewClient()
 	res, err := r.Request(
 		"GET",
 		master.ResolveReference(controller).String(),
@@ -204,11 +208,15 @@ func (service *SlavePingService) Test() serializer.Response {
 	).DecodeResponse()
 
 	if err != nil {
-		return serializer.ParamErr("从机无法向主机发送回调请求，请检查主机端 参数设置 - 站点信息 - 站点URL设置，并确保从机可以连接到此地址，"+err.Error(), nil)
+		return serializer.Err(serializer.CodeSlavePingMaster, err.Error(), nil)
 	}
 
-	if res.Data.(string) != conf.BackendVersion {
-		return serializer.ParamErr("Cloudreve版本不一致，主机："+res.Data.(string)+"，从机："+conf.BackendVersion, nil)
+	version := conf.BackendVersion
+	if conf.IsPro == "true" {
+		version += "-pro"
+	}
+	if res.Data.(string) != version {
+		return serializer.Err(serializer.CodeVersionMismatch, "Master: "+res.Data.(string)+", Slave: "+version, nil)
 	}
 
 	return serializer.Response{}
@@ -218,7 +226,7 @@ func (service *SlavePingService) Test() serializer.Response {
 func (service *SlaveTestService) Test() serializer.Response {
 	slave, err := url.Parse(service.Server)
 	if err != nil {
-		return serializer.ParamErr("无法解析从机端地址，"+err.Error(), nil)
+		return serializer.ParamErr("Failed to parse slave node server URL: "+err.Error(), nil)
 	}
 
 	controller, _ := url.Parse("/api/v3/slave/ping")
@@ -229,7 +237,7 @@ func (service *SlaveTestService) Test() serializer.Response {
 	}
 	bodyByte, _ := json.Marshal(body)
 
-	r := request.HTTPClient{}
+	r := request.NewClient()
 	res, err := r.Request(
 		"POST",
 		slave.ResolveReference(controller).String(),
@@ -241,11 +249,11 @@ func (service *SlaveTestService) Test() serializer.Response {
 		),
 	).DecodeResponse()
 	if err != nil {
-		return serializer.ParamErr("无连接到从机，"+err.Error(), nil)
+		return serializer.ParamErr("Failed to connect to slave node: "+err.Error(), nil)
 	}
 
 	if res.Code != 0 {
-		return serializer.ParamErr("成功接到从机，但是"+res.Msg, nil)
+		return serializer.ParamErr("Successfully connected to slave node, but slave returns: "+res.Msg, nil)
 	}
 
 	return serializer.Response{}
@@ -259,11 +267,11 @@ func (service *AddPolicyService) Add() serializer.Response {
 
 	if service.Policy.ID > 0 {
 		if err := model.DB.Save(&service.Policy).Error; err != nil {
-			return serializer.ParamErr("存储策略保存失败", err)
+			return serializer.DBErr("Failed to save policy", err)
 		}
 	} else {
 		if err := model.DB.Create(&service.Policy).Error; err != nil {
-			return serializer.ParamErr("存储策略添加失败", err)
+			return serializer.DBErr("Failed to create policy", err)
 		}
 	}
 
@@ -279,7 +287,7 @@ func (service *PathTestService) Test() serializer.Response {
 	path = filepath.Join(path, "test.txt")
 	file, err := util.CreatNestedFile(util.RelativePath(path))
 	if err != nil {
-		return serializer.ParamErr(fmt.Sprintf("无法创建路径 %s , %s", path, err.Error()), nil)
+		return serializer.ParamErr(fmt.Sprintf("Failed to create \"%s\": %s", path, err.Error()), nil)
 	}
 
 	file.Close()

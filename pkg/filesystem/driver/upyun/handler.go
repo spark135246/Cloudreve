@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"path"
@@ -119,7 +118,7 @@ func (handler Driver) Get(ctx context.Context, path string) (response.RSCloser, 
 	}
 
 	// 获取文件数据流
-	client := request.HTTPClient{}
+	client := request.NewClient()
 	resp, err := client.Request(
 		"GET",
 		downloadURL,
@@ -146,7 +145,7 @@ func (handler Driver) Get(ctx context.Context, path string) (response.RSCloser, 
 }
 
 // Put 将文件流保存到指定目录
-func (handler Driver) Put(ctx context.Context, file io.ReadCloser, dst string, size uint64) error {
+func (handler Driver) Put(ctx context.Context, file fsctx.FileHeader) error {
 	defer file.Close()
 
 	up := upyun.NewUpYun(&upyun.UpYunConfig{
@@ -155,7 +154,7 @@ func (handler Driver) Put(ctx context.Context, file io.ReadCloser, dst string, s
 		Password: handler.Policy.SecretKey,
 	})
 	err := up.Put(&upyun.PutObjectConfig{
-		Path:   dst,
+		Path:   file.Info().SavePath,
 		Reader: file,
 	})
 
@@ -315,45 +314,29 @@ func (handler Driver) signURL(ctx context.Context, path *url.URL, TTL int64) (st
 }
 
 // Token 获取上传策略和认证Token
-func (handler Driver) Token(ctx context.Context, TTL int64, key string) (serializer.UploadCredential, error) {
-	// 读取上下文中生成的存储路径和文件大小
-	savePath, ok := ctx.Value(fsctx.SavePathCtx).(string)
-	if !ok {
-		return serializer.UploadCredential{}, errors.New("无法获取存储路径")
-	}
-	fileSize, ok := ctx.Value(fsctx.FileSizeCtx).(uint64)
-	if !ok {
-		return serializer.UploadCredential{}, errors.New("无法获取文件大小")
-	}
-
-	// 检查文件大小
-
+func (handler Driver) Token(ctx context.Context, ttl int64, uploadSession *serializer.UploadSession, file fsctx.FileHeader) (*serializer.UploadCredential, error) {
 	// 生成回调地址
 	siteURL := model.GetSiteURL()
-	apiBaseURI, _ := url.Parse("/api/v3/callback/upyun/" + key)
+	apiBaseURI, _ := url.Parse("/api/v3/callback/upyun/" + uploadSession.Key)
 	apiURL := siteURL.ResolveReference(apiBaseURI)
 
 	// 上传策略
+	fileInfo := file.Info()
 	putPolicy := UploadPolicy{
 		Bucket: handler.Policy.BucketName,
 		// TODO escape
-		SaveKey:            savePath,
-		Expiration:         time.Now().Add(time.Duration(TTL) * time.Second).Unix(),
+		SaveKey:            fileInfo.SavePath,
+		Expiration:         time.Now().Add(time.Duration(ttl) * time.Second).Unix(),
 		CallbackURL:        apiURL.String(),
-		ContentLength:      fileSize,
-		ContentLengthRange: fmt.Sprintf("0,%d", fileSize),
+		ContentLength:      fileInfo.Size,
+		ContentLengthRange: fmt.Sprintf("0,%d", fileInfo.Size),
 		AllowFileType:      strings.Join(handler.Policy.OptionsSerialized.FileType, ","),
 	}
 
 	// 生成上传凭证
-	return handler.getUploadCredential(ctx, putPolicy)
-}
-
-func (handler Driver) getUploadCredential(ctx context.Context, policy UploadPolicy) (serializer.UploadCredential, error) {
-	// 生成上传策略
-	policyJSON, err := json.Marshal(policy)
+	policyJSON, err := json.Marshal(putPolicy)
 	if err != nil {
-		return serializer.UploadCredential{}, err
+		return nil, err
 	}
 	policyEncoded := base64.StdEncoding.EncodeToString(policyJSON)
 
@@ -361,10 +344,17 @@ func (handler Driver) getUploadCredential(ctx context.Context, policy UploadPoli
 	elements := []string{"POST", "/" + handler.Policy.BucketName, policyEncoded}
 	signStr := handler.Sign(ctx, elements)
 
-	return serializer.UploadCredential{
-		Policy: policyEncoded,
-		Token:  signStr,
+	return &serializer.UploadCredential{
+		SessionID:  uploadSession.Key,
+		Policy:     policyEncoded,
+		Credential: signStr,
+		UploadURLs: []string{"https://v0.api.upyun.com/" + handler.Policy.BucketName},
 	}, nil
+}
+
+// 取消上传凭证
+func (handler Driver) CancelToken(ctx context.Context, uploadSession *serializer.UploadSession) error {
+	return nil
 }
 
 // Sign 计算又拍云的签名头

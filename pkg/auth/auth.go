@@ -2,9 +2,11 @@ package auth
 
 import (
 	"bytes"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,9 +17,13 @@ import (
 )
 
 var (
-	ErrAuthFailed = serializer.NewError(serializer.CodeNoPermissionErr, "鉴权失败", nil)
-	ErrExpired    = serializer.NewError(serializer.CodeSignExpired, "签名已过期", nil)
+	ErrAuthFailed        = serializer.NewError(serializer.CodeNoPermissionErr, "鉴权失败", nil)
+	ErrAuthHeaderMissing = serializer.NewError(serializer.CodeNoPermissionErr, "authorization header is missing", nil)
+	ErrExpiresMissing    = serializer.NewError(serializer.CodeNoPermissionErr, "expire timestamp is missing", nil)
+	ErrExpired           = serializer.NewError(serializer.CodeSignExpired, "签名已过期", nil)
 )
+
+const CrHeaderPrefix = "X-Cr-"
 
 // General 通用的认证接口
 var General Auth
@@ -30,9 +36,8 @@ type Auth interface {
 	Check(body string, sign string) error
 }
 
-// SignRequest 对PUT\POST等复杂HTTP请求签名，如果请求Header中
-// 包含 X-Policy， 则此请求会被认定为上传请求，只会对URI部分和
-// Policy部分进行签名。其他请求则会对URI和Body部分进行签名。
+// SignRequest 对PUT\POST等复杂HTTP请求签名，只会对URI部分、
+// 请求正文、`X-Cr-`开头的header进行签名
 func SignRequest(instance Auth, r *http.Request, expires int64) *http.Request {
 	// 处理有效期
 	if expires > 0 {
@@ -54,27 +59,38 @@ func CheckRequest(instance Auth, r *http.Request) error {
 		ok   bool
 	)
 	if sign, ok = r.Header["Authorization"]; !ok || len(sign) == 0 {
-		return ErrAuthFailed
+		return ErrAuthHeaderMissing
 	}
 	sign[0] = strings.TrimPrefix(sign[0], "Bearer ")
 
 	return instance.Check(getSignContent(r), sign[0])
 }
 
-// getSignContent 根据请求Header中是否包含X-Policy判断是否为上传请求，
-// 返回待签名/验证的字符串
+// getSignContent 签名请求 path、正文、以`X-`开头的 Header. 如果请求 path 为从机上传 API，
+// 则不对正文签名。返回待签名/验证的字符串
 func getSignContent(r *http.Request) (rawSignString string) {
-	if policy, ok := r.Header["X-Policy"]; ok {
-		rawSignString = serializer.NewRequestSignString(r.URL.Path, policy[0], "")
-	} else {
-		var body = []byte{}
+	// 读取所有body正文
+	var body = []byte{}
+	if !strings.Contains(r.URL.Path, "/api/v3/slave/upload/") {
 		if r.Body != nil {
 			body, _ = ioutil.ReadAll(r.Body)
 			_ = r.Body.Close()
 			r.Body = ioutil.NopCloser(bytes.NewReader(body))
 		}
-		rawSignString = serializer.NewRequestSignString(r.URL.Path, "", string(body))
 	}
+
+	// 决定要签名的header
+	var signedHeader []string
+	for k, _ := range r.Header {
+		if strings.HasPrefix(k, CrHeaderPrefix) && k != CrHeaderPrefix+"Filename" {
+			signedHeader = append(signedHeader, fmt.Sprintf("%s=%s", k, r.Header.Get(k)))
+		}
+	}
+	sort.Strings(signedHeader)
+
+	// 读取所有待签名Header
+	rawSignString = serializer.NewRequestSignString(r.URL.Path, strings.Join(signedHeader, "&"), string(body))
+
 	return rawSignString
 }
 

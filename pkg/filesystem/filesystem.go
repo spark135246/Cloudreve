@@ -9,9 +9,12 @@ import (
 	"net/url"
 	"sync"
 
+	"fmt"
+
 	model "github.com/cloudreve/Cloudreve/v3/models"
-	"github.com/cloudreve/Cloudreve/v3/pkg/auth"
+	"github.com/cloudreve/Cloudreve/v3/pkg/cluster"
 	"github.com/cloudreve/Cloudreve/v3/pkg/conf"
+	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/driver"
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/driver/cos"
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/driver/local"
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/driver/onedrive"
@@ -19,6 +22,8 @@ import (
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/driver/qiniu"
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/driver/remote"
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/driver/s3"
+	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/driver/shadow/masterinslave"
+	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/driver/shadow/slaveinmaster"
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/driver/upyun"
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/response"
 	"github.com/cloudreve/Cloudreve/v3/pkg/request"
@@ -103,7 +108,7 @@ type FileSystem struct {
 	/*
 	   文件系统处理适配器
 	*/
-	Handler Handler
+	Handler driver.Handler
 
 	// 回收锁
 	recycleLock sync.Mutex
@@ -138,10 +143,11 @@ func (fs *FileSystem) reset() {
 func NewFileSystem(user *model.User) (*FileSystem, error) {
 	fs := getEmptyFS()
 	fs.User = user
+	fs.Policy = &fs.User.Policy
+
 	// 分配存储策略适配器
 	err := fs.DispatchHandler()
 
-	// TODO 分配默认钩子
 	return fs, err
 }
 
@@ -166,19 +172,12 @@ func NewAnonymousFileSystem() (*FileSystem, error) {
 }
 
 // DispatchHandler 根据存储策略分配文件适配器
-// TODO 完善测试
 func (fs *FileSystem) DispatchHandler() error {
-	var policyType string
-	var currentPolicy *model.Policy
-
 	if fs.Policy == nil {
-		// 如果没有具体指定，就是用用户当前存储策略
-		policyType = fs.User.Policy.Type
-		currentPolicy = &fs.User.Policy
-	} else {
-		policyType = fs.Policy.Type
-		currentPolicy = fs.Policy
+		return errors.New("未设置存储策略")
 	}
+	policyType := fs.Policy.Type
+	currentPolicy := fs.Policy
 
 	switch policyType {
 	case "mock", "anonymous":
@@ -189,36 +188,28 @@ func (fs *FileSystem) DispatchHandler() error {
 		}
 		return nil
 	case "remote":
-		fs.Handler = remote.Driver{
-			Policy:       currentPolicy,
-			Client:       request.HTTPClient{},
-			AuthInstance: auth.HMACAuth{[]byte(currentPolicy.SecretKey)},
+		handler, err := remote.NewDriver(currentPolicy)
+		if err != nil {
+			return err
 		}
-		return nil
+
+		fs.Handler = handler
 	case "qiniu":
-		fs.Handler = qiniu.Driver{
-			Policy: currentPolicy,
-		}
+		fs.Handler = qiniu.NewDriver(currentPolicy)
 		return nil
 	case "oss":
-		fs.Handler = oss.Driver{
-			Policy:     currentPolicy,
-			HTTPClient: request.HTTPClient{},
-		}
-		return nil
+		handler, err := oss.NewDriver(currentPolicy)
+		fs.Handler = handler
+		return err
 	case "upyun":
 		fs.Handler = upyun.Driver{
 			Policy: currentPolicy,
 		}
 		return nil
 	case "onedrive":
-		client, err := onedrive.NewClient(currentPolicy)
-		fs.Handler = onedrive.Driver{
-			Policy:     currentPolicy,
-			Client:     client,
-			HTTPClient: request.HTTPClient{},
-		}
-		return err
+		var odErr error
+		fs.Handler, odErr = onedrive.NewDriver(currentPolicy)
+		return odErr
 	case "cos":
 		u, _ := url.Parse(currentPolicy.Server)
 		b := &cossdk.BaseURL{BucketURL: u}
@@ -230,17 +221,18 @@ func (fs *FileSystem) DispatchHandler() error {
 					SecretKey: currentPolicy.SecretKey,
 				},
 			}),
-			HTTPClient: request.HTTPClient{},
+			HTTPClient: request.NewClient(),
 		}
 		return nil
 	case "s3":
-		fs.Handler = s3.Driver{
-			Policy: currentPolicy,
-		}
-		return nil
+		handler, err := s3.NewDriver(currentPolicy)
+		fs.Handler = handler
+		return err
 	default:
 		return ErrUnknownPolicyType
 	}
+
+	return nil
 }
 
 // NewFileSystemFromContext 从gin.Context创建文件系统
@@ -261,22 +253,38 @@ func NewFileSystemFromCallback(c *gin.Context) (*FileSystem, error) {
 	}
 
 	// 获取回调会话
-	callbackSessionRaw, ok := c.Get("callbackSession")
+	callbackSessionRaw, ok := c.Get(UploadSessionCtx)
 	if !ok {
 		return nil, errors.New("找不到回调会话")
 	}
 	callbackSession := callbackSessionRaw.(*serializer.UploadSession)
 
 	// 重新指向上传策略
-	policy, err := model.GetPolicyByID(callbackSession.PolicyID)
-	if err != nil {
-		return nil, err
-	}
-	fs.Policy = &policy
-	fs.User.Policy = policy
+	fs.Policy = &callbackSession.Policy
 	err = fs.DispatchHandler()
 
 	return fs, err
+}
+
+// SwitchToSlaveHandler 将负责上传的 Handler 切换为从机节点
+func (fs *FileSystem) SwitchToSlaveHandler(node cluster.Node) {
+	fs.Handler = slaveinmaster.NewDriver(node, fs.Handler, fs.Policy)
+}
+
+// SwitchToShadowHandler 将负责上传的 Handler 切换为从机节点转存使用的影子处理器
+func (fs *FileSystem) SwitchToShadowHandler(master cluster.Node, masterURL, masterID string) {
+	switch fs.Policy.Type {
+	case "local":
+		fs.Policy.Type = "remote"
+		fs.Policy.Server = masterURL
+		fs.Policy.AccessKey = fmt.Sprintf("%d", master.ID())
+		fs.Policy.SecretKey = master.DBModel().MasterKey
+		fs.DispatchHandler()
+	case "onedrive":
+		fs.Policy.MasterID = masterID
+	}
+
+	fs.Handler = masterinslave.NewDriver(master, fs.Handler, fs.Policy)
 }
 
 // SetTargetFile 设置当前处理的目标文件

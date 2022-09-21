@@ -3,6 +3,7 @@ package model
 import (
 	"crypto/md5"
 	"crypto/sha1"
+	"encoding/gob"
 	"encoding/hex"
 	"encoding/json"
 	"strings"
@@ -35,8 +36,8 @@ type User struct {
 	Storage   uint64
 	TwoFactor string
 	Avatar    string
-	Options   string `json:"-",gorm:"type:text"`
-	Authn     string `gorm:"type:text"`
+	Options   string `json:"-" gorm:"size:4294967295"`
+	Authn     string `gorm:"size:4294967295"`
 
 	// 关联模型
 	Group  Group  `gorm:"save_associations:false:false"`
@@ -44,6 +45,10 @@ type User struct {
 
 	// 数据库忽略字段
 	OptionsSerialized UserOption `gorm:"-"`
+}
+
+func init() {
+	gob.Register(User{})
 }
 
 // UserOption 用户个性化配置字段
@@ -124,6 +129,11 @@ func (user *User) IncreaseStorageTransaction(size uint64, tx *gorm.DB) bool {
 		return true
 	}
 	return false
+}
+
+// ChangeStorage 更新用户容量
+func (user *User) ChangeStorage(tx *gorm.DB, operator string, size uint64) error {
+	return tx.Model(user).Update("storage", gorm.Expr("storage "+operator+" ?", size)).Error
 }
 
 // IncreaseStorageWithoutCheck 忽略可用容量，增加用户已用容量
@@ -232,7 +242,7 @@ func (user *User) AfterFind() (err error) {
 	return err
 }
 
-//SerializeOptions 将序列后的Option写入到数据库字段
+// SerializeOptions 将序列后的Option写入到数据库字段
 func (user *User) SerializeOptions() (err error) {
 	optionsValue, err := json.Marshal(&user.OptionsSerialized)
 	user.Options = string(optionsValue)

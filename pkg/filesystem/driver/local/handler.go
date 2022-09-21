@@ -11,14 +11,18 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/HFO4/cloudreve/pkg/conf"
 	model "github.com/cloudreve/Cloudreve/v3/models"
 	"github.com/cloudreve/Cloudreve/v3/pkg/auth"
 	"github.com/cloudreve/Cloudreve/v3/pkg/cache"
-	"github.com/cloudreve/Cloudreve/v3/pkg/conf"
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/fsctx"
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/response"
 	"github.com/cloudreve/Cloudreve/v3/pkg/serializer"
 	"github.com/cloudreve/Cloudreve/v3/pkg/util"
+)
+
+const (
+	Perm = 0744
 )
 
 // Driver 本地策略适配器
@@ -81,29 +85,17 @@ func (handler Driver) Get(ctx context.Context, path string) (response.RSCloser, 
 		return nil, err
 	}
 
-	// 开启一个协程，用于请求结束后关闭reader
-	// go closeReader(ctx, file)
-
 	return file, nil
 }
 
-// closeReader 用于在请求结束后关闭reader
-// TODO 让业务代码自己关闭
-func closeReader(ctx context.Context, closer io.Closer) {
-	select {
-	case <-ctx.Done():
-		_ = closer.Close()
-
-	}
-}
-
 // Put 将文件流保存到指定目录
-func (handler Driver) Put(ctx context.Context, file io.ReadCloser, dst string, size uint64) error {
+func (handler Driver) Put(ctx context.Context, file fsctx.FileHeader) error {
 	defer file.Close()
-	dst = util.RelativePath(filepath.FromSlash(dst))
+	fileInfo := file.Info()
+	dst := util.RelativePath(filepath.FromSlash(fileInfo.SavePath))
 
-	// 如果禁止了 Overwrite，则检查是否有重名冲突
-	if ctx.Value(fsctx.DisableOverwrite) != nil {
+	// 如果非 Overwrite，则检查是否有重名冲突
+	if fileInfo.Mode&fsctx.Overwrite != fsctx.Overwrite {
 		if util.Exists(dst) {
 			util.Log().Warning("物理同名文件已存在或不可用: %s", dst)
 			return errors.New("物理同名文件已存在或不可用")
@@ -113,20 +105,55 @@ func (handler Driver) Put(ctx context.Context, file io.ReadCloser, dst string, s
 	// 如果目标目录不存在，创建
 	basePath := filepath.Dir(dst)
 	if !util.Exists(basePath) {
-		err := os.MkdirAll(basePath, 0744)
+		err := os.MkdirAll(basePath, Perm)
 		if err != nil {
 			util.Log().Warning("无法创建目录，%s", err)
 			return err
 		}
 	}
 
-	// 创建目标文件
-	out, err := os.Create(dst)
+	var (
+		out *os.File
+		err error
+	)
+
+	openMode := os.O_CREATE | os.O_RDWR
+	if fileInfo.Mode&fsctx.Append == fsctx.Append {
+		openMode |= os.O_APPEND
+	} else {
+		openMode |= os.O_TRUNC
+	}
+
+	out, err = os.OpenFile(dst, openMode, Perm)
 	if err != nil {
-		util.Log().Warning("无法创建文件，%s", err)
+		util.Log().Warning("无法打开或创建文件，%s", err)
 		return err
 	}
 	defer out.Close()
+
+	if fileInfo.Mode&fsctx.Append == fsctx.Append {
+		stat, err := out.Stat()
+		if err != nil {
+			util.Log().Warning("无法读取文件信息，%s", err)
+			return err
+		}
+
+		if uint64(stat.Size()) < fileInfo.AppendStart {
+			return errors.New("未上传完成的文件分片与预期大小不一致")
+		} else if uint64(stat.Size()) > fileInfo.AppendStart {
+			out.Close()
+			if err := handler.Truncate(ctx, dst, fileInfo.AppendStart); err != nil {
+				return fmt.Errorf("覆盖分片时发生错误: %w", err)
+			}
+
+			out, err = os.OpenFile(dst, openMode, Perm)
+			defer out.Close()
+			if err != nil {
+				util.Log().Warning("无法打开或创建文件，%s", err)
+				return err
+			}
+		}
+	}
 
 	// 写入文件内容
 	_, err = io.Copy(out, file)
@@ -165,6 +192,18 @@ func (handler Driver) Move(ctx context.Context, file io.ReadCloser, dst string, 
 		util.Log().Info("成功移动......")
 	}
 	return err
+}
+
+func (handler Driver) Truncate(ctx context.Context, src string, size uint64) error {
+	util.Log().Warning("截断文件 [%s] 至 [%d]", src, size)
+	out, err := os.OpenFile(src, os.O_WRONLY, Perm)
+	if err != nil {
+		util.Log().Warning("无法打开文件，%s", err)
+		return err
+	}
+
+	defer out.Close()
+	return out.Truncate(int64(size))
 }
 
 // Delete 删除一个或多个文件，
@@ -233,7 +272,7 @@ func (handler Driver) Delete(ctx context.Context, files []string) ([]string, err
 
 // Thumb 获取文件缩略图
 func (handler Driver) Thumb(ctx context.Context, path string) (*response.ContentResponse, error) {
-	file, err := handler.Get(ctx, path+conf.ThumbConfig.FileSuffix)
+	file, err := handler.Get(ctx, path+model.GetSettingByNameWithDefault("thumb_file_suffix", "._thumb"))
 	if err != nil {
 		return nil, err
 	}
@@ -303,6 +342,18 @@ func (handler Driver) Source(
 }
 
 // Token 获取上传策略和认证Token，本地策略直接返回空值
-func (handler Driver) Token(ctx context.Context, ttl int64, key string) (serializer.UploadCredential, error) {
-	return serializer.UploadCredential{}, nil
+func (handler Driver) Token(ctx context.Context, ttl int64, uploadSession *serializer.UploadSession, file fsctx.FileHeader) (*serializer.UploadCredential, error) {
+	if util.Exists(uploadSession.SavePath) {
+		return nil, errors.New("placeholder file already exist")
+	}
+
+	return &serializer.UploadCredential{
+		SessionID: uploadSession.Key,
+		ChunkSize: handler.Policy.OptionsSerialized.ChunkSize,
+	}, nil
+}
+
+// 取消上传凭证
+func (handler Driver) CancelToken(ctx context.Context, uploadSession *serializer.UploadSession) error {
+	return nil
 }

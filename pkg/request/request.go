@@ -1,23 +1,25 @@
 package request
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
-	"time"
+	"net/url"
+	"strings"
+	"sync"
 
 	model "github.com/cloudreve/Cloudreve/v3/models"
 	"github.com/cloudreve/Cloudreve/v3/pkg/auth"
+	"github.com/cloudreve/Cloudreve/v3/pkg/conf"
 	"github.com/cloudreve/Cloudreve/v3/pkg/serializer"
 	"github.com/cloudreve/Cloudreve/v3/pkg/util"
 )
 
 // GeneralClient 通用 HTTP Client
-var GeneralClient Client = HTTPClient{}
+var GeneralClient Client = NewClient()
 
 // Response 请求的响应或错误信息
 type Response struct {
@@ -32,90 +34,32 @@ type Client interface {
 
 // HTTPClient 实现 Client 接口
 type HTTPClient struct {
+	mu         sync.Mutex
+	options    *options
+	tpsLimiter TPSLimiter
 }
 
-// Option 发送请求的额外设置
-type Option interface {
-	apply(*options)
-}
-
-type options struct {
-	timeout       time.Duration
-	header        http.Header
-	sign          auth.Auth
-	signTTL       int64
-	ctx           context.Context
-	contentLength int64
-}
-
-type optionFunc func(*options)
-
-func (f optionFunc) apply(o *options) {
-	f(o)
-}
-
-func newDefaultOption() *options {
-	return &options{
-		header:        http.Header{},
-		timeout:       time.Duration(30) * time.Second,
-		contentLength: -1,
+func NewClient(opts ...Option) Client {
+	client := &HTTPClient{
+		options:    newDefaultOption(),
+		tpsLimiter: globalTPSLimiter,
 	}
-}
 
-// WithTimeout 设置请求超时
-func WithTimeout(t time.Duration) Option {
-	return optionFunc(func(o *options) {
-		o.timeout = t
-	})
-}
+	for _, o := range opts {
+		o.apply(client.options)
+	}
 
-// WithContext 设置请求上下文
-func WithContext(c context.Context) Option {
-	return optionFunc(func(o *options) {
-		o.ctx = c
-	})
-}
-
-// WithCredential 对请求进行签名
-func WithCredential(instance auth.Auth, ttl int64) Option {
-	return optionFunc(func(o *options) {
-		o.sign = instance
-		o.signTTL = ttl
-	})
-}
-
-// WithHeader 设置请求Header
-func WithHeader(header http.Header) Option {
-	return optionFunc(func(o *options) {
-		for k, v := range header {
-			o.header[k] = v
-		}
-	})
-}
-
-// WithoutHeader 设置清除请求Header
-func WithoutHeader(header []string) Option {
-	return optionFunc(func(o *options) {
-		for _, v := range header {
-			delete(o.header, v)
-		}
-
-	})
-}
-
-// WithContentLength 设置请求大小
-func WithContentLength(s int64) Option {
-	return optionFunc(func(o *options) {
-		o.contentLength = s
-	})
+	return client
 }
 
 // Request 发送HTTP请求
-func (c HTTPClient) Request(method, target string, body io.Reader, opts ...Option) *Response {
+func (c *HTTPClient) Request(method, target string, body io.Reader, opts ...Option) *Response {
 	// 应用额外设置
-	options := newDefaultOption()
+	c.mu.Lock()
+	options := *c.options
+	c.mu.Unlock()
 	for _, o := range opts {
-		o.apply(options)
+		o.apply(&options)
 	}
 
 	// 创建请求客户端
@@ -124,6 +68,17 @@ func (c HTTPClient) Request(method, target string, body io.Reader, opts ...Optio
 	// size为0时将body设为nil
 	if options.contentLength == 0 {
 		body = nil
+	}
+
+	// 确定请求URL
+	if options.endpoint != nil {
+		targetPath, err := url.Parse(target)
+		if err != nil {
+			return &Response{Err: err}
+		}
+
+		targetURL := *options.endpoint
+		target = targetURL.ResolveReference(targetPath).String()
 	}
 
 	// 创建请求
@@ -141,14 +96,40 @@ func (c HTTPClient) Request(method, target string, body io.Reader, opts ...Optio
 	}
 
 	// 添加请求相关设置
-	req.Header = options.header
+	if options.header != nil {
+		for k, v := range options.header {
+			req.Header.Add(k, strings.Join(v, " "))
+		}
+	}
+
+	if options.masterMeta && conf.SystemConfig.Mode == "master" {
+		req.Header.Add(auth.CrHeaderPrefix+"Site-Url", model.GetSiteURL().String())
+		req.Header.Add(auth.CrHeaderPrefix+"Site-Id", model.GetSettingByName("siteID"))
+		req.Header.Add(auth.CrHeaderPrefix+"Cloudreve-Version", conf.BackendVersion)
+	}
+
+	if options.slaveNodeID != "" && conf.SystemConfig.Mode == "slave" {
+		req.Header.Add(auth.CrHeaderPrefix+"Node-Id", options.slaveNodeID)
+	}
+
 	if options.contentLength != -1 {
 		req.ContentLength = options.contentLength
 	}
 
 	// 签名请求
 	if options.sign != nil {
-		auth.SignRequest(options.sign, req, options.signTTL)
+		switch method {
+		case "PUT", "POST", "PATCH":
+			auth.SignRequest(options.sign, req, options.signTTL)
+		default:
+			if resURL, err := auth.SignURI(options.sign, req.URL.String(), options.signTTL); err == nil {
+				req.URL = resURL
+			}
+		}
+	}
+
+	if options.tps > 0 {
+		c.tpsLimiter.Limit(options.ctx, options.tpsLimiterToken, options.tps, options.tpsBurst)
 	}
 
 	// 发送请求
@@ -277,9 +258,6 @@ func (instance NopRSCloser) Seek(offset int64, whence int) (int64, error) {
 // BlackHole 将客户端发来的数据放入黑洞
 func BlackHole(r io.Reader) {
 	if !model.IsTrueVal(model.GetSettingByName("reset_after_upload_failed")) {
-		_, err := io.Copy(ioutil.Discard, r)
-		if err != nil {
-			util.Log().Debug("黑洞数据出错，%s", err)
-		}
+		io.Copy(ioutil.Discard, r)
 	}
 }

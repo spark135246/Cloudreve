@@ -1,9 +1,9 @@
 package serializer
 
 import (
-	"encoding/base64"
 	"encoding/gob"
-	"encoding/json"
+	model "github.com/cloudreve/Cloudreve/v3/models"
+	"time"
 )
 
 // UploadPolicy slave模式下传递的上传策略
@@ -18,32 +18,40 @@ type UploadPolicy struct {
 
 // UploadCredential 返回给客户端的上传凭证
 type UploadCredential struct {
-	Token     string `json:"token"`
-	Policy    string `json:"policy"`
-	Path      string `json:"path"` // 存储路径
-	AccessKey string `json:"ak"`
-	KeyTime   string `json:"key_time,omitempty"` // COS用有效期
-	Callback  string `json:"callback,omitempty"` // 回调地址
-	Key       string `json:"key,omitempty"`      // 文件标识符，通常为回调key
+	SessionID   string   `json:"sessionID"`
+	ChunkSize   uint64   `json:"chunkSize"` // 分块大小，0 为部分快
+	Expires     int64    `json:"expires"`   // 上传凭证过期时间， Unix 时间戳
+	UploadURLs  []string `json:"uploadURLs,omitempty"`
+	Credential  string   `json:"credential,omitempty"`
+	UploadID    string   `json:"uploadID,omitempty"`
+	Callback    string   `json:"callback,omitempty"` // 回调地址
+	Path        string   `json:"path,omitempty"`     // 存储路径
+	AccessKey   string   `json:"ak,omitempty"`
+	KeyTime     string   `json:"keyTime,omitempty"` // COS用有效期
+	Policy      string   `json:"policy,omitempty"`
+	CompleteURL string   `json:"completeURL,omitempty"`
 }
 
 // UploadSession 上传会话
 type UploadSession struct {
-	Key         string
-	UID         uint
-	PolicyID    uint
-	VirtualPath string
-	Name        string
-	Size        uint64
-	SavePath    string
+	Key            string     // 上传会话 GUID
+	UID            uint       // 发起者
+	VirtualPath    string     // 用户文件路径，不含文件名
+	Name           string     // 文件名
+	Size           uint64     // 文件大小
+	SavePath       string     // 物理存储路径，包含物理文件名
+	LastModified   *time.Time // 可选的文件最后修改日期
+	Policy         model.Policy
+	Callback       string // 回调 URL 地址
+	CallbackSecret string // 回调 URL
+	UploadURL      string
+	UploadID       string
+	Credential     string
 }
 
 // UploadCallback 上传回调正文
 type UploadCallback struct {
-	Name       string `json:"name"`
-	SourceName string `json:"source_name"`
-	PicInfo    string `json:"pic_info"`
-	Size       uint64 `json:"size"`
+	PicInfo string `json:"pic_info"`
 }
 
 // GeneralUploadCallbackFailed 存储策略上传回调失败响应
@@ -53,33 +61,4 @@ type GeneralUploadCallbackFailed struct {
 
 func init() {
 	gob.Register(UploadSession{})
-}
-
-// DecodeUploadPolicy 反序列化Header中携带的上传策略
-func DecodeUploadPolicy(raw string) (*UploadPolicy, error) {
-	var res UploadPolicy
-
-	rawJSON, err := base64.StdEncoding.DecodeString(raw)
-	if err != nil {
-		return nil, err
-	}
-
-	err = json.Unmarshal(rawJSON, &res)
-	if err != nil {
-		return nil, err
-	}
-
-	return &res, err
-}
-
-// EncodeUploadPolicy 序列化Header中携带的上传策略
-func (policy *UploadPolicy) EncodeUploadPolicy() (string, error) {
-	jsonRes, err := json.Marshal(policy)
-	if err != nil {
-		return "", err
-	}
-
-	res := base64.StdEncoding.EncodeToString(jsonRes)
-	return res, nil
-
 }

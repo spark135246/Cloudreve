@@ -5,33 +5,36 @@ import (
 	"context"
 	"crypto/md5"
 	"fmt"
+	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem"
+	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/driver/oss"
+	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/driver/upyun"
+	"github.com/cloudreve/Cloudreve/v3/pkg/mq"
+	"github.com/cloudreve/Cloudreve/v3/pkg/util"
+	"github.com/qiniu/go-sdk/v7/auth/qbox"
 	"io/ioutil"
 	"net/http"
 
 	model "github.com/cloudreve/Cloudreve/v3/models"
 	"github.com/cloudreve/Cloudreve/v3/pkg/auth"
 	"github.com/cloudreve/Cloudreve/v3/pkg/cache"
-	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/driver/onedrive"
-	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/driver/oss"
-	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/driver/upyun"
 	"github.com/cloudreve/Cloudreve/v3/pkg/serializer"
-	"github.com/cloudreve/Cloudreve/v3/pkg/util"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
-	"github.com/qiniu/api.v7/v7/auth/qbox"
+)
+
+const (
+	CallbackFailedStatusCode = http.StatusUnauthorized
 )
 
 // SignRequired 验证请求签名
-func SignRequired() gin.HandlerFunc {
+func SignRequired(authInstance auth.Auth) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var err error
 		switch c.Request.Method {
-		case "PUT", "POST":
-			err = auth.CheckRequest(auth.General, c.Request)
-			// TODO 生产环境去掉下一行
-			//err = nil
+		case "PUT", "POST", "PATCH":
+			err = auth.CheckRequest(authInstance, c.Request)
 		default:
-			err = auth.CheckURI(auth.General, c.Request.URL)
+			err = auth.CheckURI(authInstance, c.Request.URL)
 		}
 
 		if err != nil {
@@ -39,6 +42,7 @@ func SignRequired() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+
 		c.Next()
 	}
 }
@@ -118,48 +122,60 @@ func WebDAVAuth() gin.HandlerFunc {
 	}
 }
 
+// 对上传会话进行验证
+func UseUploadSession(policyType string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// 验证key并查找用户
+		resp := uploadCallbackCheck(c, policyType)
+		if resp.Code != 0 {
+			c.JSON(CallbackFailedStatusCode, resp)
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}
+
 // uploadCallbackCheck 对上传回调请求的 callback key 进行验证，如果成功则返回上传用户
-func uploadCallbackCheck(c *gin.Context) (serializer.Response, *model.User) {
+func uploadCallbackCheck(c *gin.Context, policyType string) serializer.Response {
 	// 验证 Callback Key
-	callbackKey := c.Param("key")
-	if callbackKey == "" {
-		return serializer.ParamErr("Callback Key 不能为空", nil), nil
+	sessionID := c.Param("sessionID")
+	if sessionID == "" {
+		return serializer.ParamErr("Session ID 不能为空", nil)
 	}
-	callbackSessionRaw, exist := cache.Get("callback_" + callbackKey)
+
+	callbackSessionRaw, exist := cache.Get(filesystem.UploadSessionCachePrefix + sessionID)
 	if !exist {
-		return serializer.ParamErr("回调会话不存在或已过期", nil), nil
+		return serializer.ParamErr("上传会话不存在或已过期", nil)
 	}
+
 	callbackSession := callbackSessionRaw.(serializer.UploadSession)
-	c.Set("callbackSession", &callbackSession)
+	c.Set(filesystem.UploadSessionCtx, &callbackSession)
+	if callbackSession.Policy.Type != policyType {
+		return serializer.Err(serializer.CodePolicyNotAllowed, "Policy not supported", nil)
+	}
 
 	// 清理回调会话
-	_ = cache.Deletes([]string{callbackKey}, "callback_")
+	_ = cache.Deletes([]string{sessionID}, filesystem.UploadSessionCachePrefix)
 
 	// 查找用户
 	user, err := model.GetActiveUserByID(callbackSession.UID)
 	if err != nil {
-		return serializer.Err(serializer.CodeCheckLogin, "找不到用户", err), nil
+		return serializer.Err(serializer.CodeCheckLogin, "找不到用户", err)
 	}
-	c.Set("user", &user)
-
-	return serializer.Response{}, &user
+	c.Set(filesystem.UserCtx, &user)
+	return serializer.Response{}
 }
 
 // RemoteCallbackAuth 远程回调签名验证
 func RemoteCallbackAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 验证key并查找用户
-		resp, user := uploadCallbackCheck(c)
-		if resp.Code != 0 {
-			c.JSON(200, resp)
-			c.Abort()
-			return
-		}
-
 		// 验证签名
-		authInstance := auth.HMACAuth{SecretKey: []byte(user.Policy.SecretKey)}
+		session := c.MustGet(filesystem.UploadSessionCtx).(*serializer.UploadSession)
+		authInstance := auth.HMACAuth{SecretKey: []byte(session.Policy.SecretKey)}
 		if err := auth.CheckRequest(authInstance, c.Request); err != nil {
-			c.JSON(200, serializer.Err(serializer.CodeCheckLogin, err.Error(), err))
+			c.JSON(CallbackFailedStatusCode, serializer.Err(serializer.CodeCredentialInvalid, err.Error(), err))
 			c.Abort()
 			return
 		}
@@ -172,16 +188,10 @@ func RemoteCallbackAuth() gin.HandlerFunc {
 // QiniuCallbackAuth 七牛回调签名验证
 func QiniuCallbackAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 验证key并查找用户
-		resp, user := uploadCallbackCheck(c)
-		if resp.Code != 0 {
-			c.JSON(401, serializer.GeneralUploadCallbackFailed{Error: resp.Msg})
-			c.Abort()
-			return
-		}
+		session := c.MustGet(filesystem.UploadSessionCtx).(*serializer.UploadSession)
 
 		// 验证回调是否来自qiniu
-		mac := qbox.NewMac(user.Policy.AccessKey, user.Policy.SecretKey)
+		mac := qbox.NewMac(session.Policy.AccessKey, session.Policy.SecretKey)
 		ok, err := mac.VerifyCallback(c.Request)
 		if err != nil {
 			util.Log().Debug("无法验证回调请求，%s", err)
@@ -189,6 +199,7 @@ func QiniuCallbackAuth() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+
 		if !ok {
 			c.JSON(401, serializer.GeneralUploadCallbackFailed{Error: "回调签名无效"})
 			c.Abort()
@@ -202,14 +213,6 @@ func QiniuCallbackAuth() gin.HandlerFunc {
 // OSSCallbackAuth 阿里云OSS回调签名验证
 func OSSCallbackAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 验证key并查找用户
-		resp, _ := uploadCallbackCheck(c)
-		if resp.Code != 0 {
-			c.JSON(401, serializer.GeneralUploadCallbackFailed{Error: resp.Msg})
-			c.Abort()
-			return
-		}
-
 		err := oss.VerifyCallbackSignature(c.Request)
 		if err != nil {
 			util.Log().Debug("回调签名验证失败，%s", err)
@@ -225,13 +228,7 @@ func OSSCallbackAuth() gin.HandlerFunc {
 // UpyunCallbackAuth 又拍云回调签名验证
 func UpyunCallbackAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 验证key并查找用户
-		resp, user := uploadCallbackCheck(c)
-		if resp.Code != 0 {
-			c.JSON(401, serializer.GeneralUploadCallbackFailed{Error: resp.Msg})
-			c.Abort()
-			return
-		}
+		session := c.MustGet(filesystem.UploadSessionCtx).(*serializer.UploadSession)
 
 		// 获取请求正文
 		body, err := ioutil.ReadAll(c.Request.Body)
@@ -245,7 +242,7 @@ func UpyunCallbackAuth() gin.HandlerFunc {
 		c.Request.Body = ioutil.NopCloser(bytes.NewReader(body))
 
 		// 准备验证Upyun回调签名
-		handler := upyun.Driver{Policy: &user.Policy}
+		handler := upyun.Driver{Policy: &session.Policy}
 		contentMD5 := c.Request.Header.Get("Content-Md5")
 		date := c.Request.Header.Get("Date")
 		actualSignature := c.Request.Header.Get("Authorization")
@@ -278,50 +275,10 @@ func UpyunCallbackAuth() gin.HandlerFunc {
 }
 
 // OneDriveCallbackAuth OneDrive回调签名验证
-// TODO 解耦
 func OneDriveCallbackAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 验证key并查找用户
-		resp, _ := uploadCallbackCheck(c)
-		if resp.Code != 0 {
-			c.JSON(401, serializer.GeneralUploadCallbackFailed{Error: resp.Msg})
-			c.Abort()
-			return
-		}
-
 		// 发送回调结束信号
-		onedrive.FinishCallback(c.Param("key"))
-
-		c.Next()
-	}
-}
-
-// COSCallbackAuth 腾讯云COS回调签名验证
-// TODO 解耦 测试
-func COSCallbackAuth() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		// 验证key并查找用户
-		resp, _ := uploadCallbackCheck(c)
-		if resp.Code != 0 {
-			c.JSON(401, serializer.GeneralUploadCallbackFailed{Error: resp.Msg})
-			c.Abort()
-			return
-		}
-
-		c.Next()
-	}
-}
-
-// S3CallbackAuth Amazon S3回调签名验证
-func S3CallbackAuth() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		// 验证key并查找用户
-		resp, _ := uploadCallbackCheck(c)
-		if resp.Code != 0 {
-			c.JSON(401, serializer.GeneralUploadCallbackFailed{Error: resp.Msg})
-			c.Abort()
-			return
-		}
+		mq.GlobalMQ.Publish(c.Param("sessionID"), mq.Message{})
 
 		c.Next()
 	}

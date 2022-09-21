@@ -10,7 +10,9 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"mime"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -188,7 +190,7 @@ func props(ctx context.Context, fs *filesystem.FileSystem, ls LockSystem, fi Fil
 		}
 		// Otherwise, it must either be a live property or we don't know it.
 		if prop := liveProps[pn]; prop.findFn != nil && (prop.dir || !isDir) {
-			innerXML, err := prop.findFn(ctx, fs, ls, "", fi)
+			innerXML, err := prop.findFn(ctx, fs, ls, fi.GetName(), fi)
 			if err != nil {
 				return nil, err
 			}
@@ -381,7 +383,7 @@ func findContentType(ctx context.Context, fs *filesystem.FileSystem, ls LockSyst
 	//// Rewind file.
 	//_, err = f.Seek(0, os.SEEK_SET)
 	//return ctype, err
-	return "", nil
+	return mime.TypeByExtension(filepath.Ext(name)), nil
 }
 
 // ETager is an optional interface for the os.FileInfo objects

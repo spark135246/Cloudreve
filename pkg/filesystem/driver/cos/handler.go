@@ -183,9 +183,11 @@ func (handler Driver) Get(ctx context.Context, path string) (response.RSCloser, 
 }
 
 // Put 将文件流保存到指定目录
-func (handler Driver) Put(ctx context.Context, file io.ReadCloser, dst string, size uint64) error {
+func (handler Driver) Put(ctx context.Context, file fsctx.FileHeader) error {
+	defer file.Close()
+
 	opt := &cossdk.ObjectPutOptions{}
-	_, err := handler.Client.Object.Put(ctx, dst, file, opt)
+	_, err := handler.Client.Object.Put(ctx, file.Info().SavePath, file, opt)
 	return err
 }
 
@@ -328,21 +330,16 @@ func (handler Driver) signSourceURL(ctx context.Context, path string, ttl int64,
 }
 
 // Token 获取上传策略和认证Token
-func (handler Driver) Token(ctx context.Context, TTL int64, key string) (serializer.UploadCredential, error) {
-	// 读取上下文中生成的存储路径
-	savePath, ok := ctx.Value(fsctx.SavePathCtx).(string)
-	if !ok {
-		return serializer.UploadCredential{}, errors.New("无法获取存储路径")
-	}
-
+func (handler Driver) Token(ctx context.Context, ttl int64, uploadSession *serializer.UploadSession, file fsctx.FileHeader) (*serializer.UploadCredential, error) {
 	// 生成回调地址
 	siteURL := model.GetSiteURL()
-	apiBaseURI, _ := url.Parse("/api/v3/callback/cos/" + key)
+	apiBaseURI, _ := url.Parse("/api/v3/callback/cos/" + uploadSession.Key)
 	apiURL := siteURL.ResolveReference(apiBaseURI).String()
 
 	// 上传策略
+	savePath := file.Info().SavePath
 	startTime := time.Now()
-	endTime := startTime.Add(time.Duration(TTL) * time.Second)
+	endTime := startTime.Add(time.Duration(ttl) * time.Second)
 	keyTime := fmt.Sprintf("%d;%d", startTime.Unix(), endTime.Unix())
 	postPolicy := UploadPolicy{
 		Expiration: endTime.UTC().Format(time.RFC3339),
@@ -350,7 +347,7 @@ func (handler Driver) Token(ctx context.Context, TTL int64, key string) (seriali
 			map[string]string{"bucket": handler.Policy.BucketName},
 			map[string]string{"$key": savePath},
 			map[string]string{"x-cos-meta-callback": apiURL},
-			map[string]string{"x-cos-meta-key": key},
+			map[string]string{"x-cos-meta-key": uploadSession.Key},
 			map[string]string{"q-sign-algorithm": "sha1"},
 			map[string]string{"q-ak": handler.Policy.AccessKey},
 			map[string]string{"q-sign-time": keyTime},
@@ -362,14 +359,20 @@ func (handler Driver) Token(ctx context.Context, TTL int64, key string) (seriali
 			[]interface{}{"content-length-range", 0, handler.Policy.MaxSize})
 	}
 
-	res, err := handler.getUploadCredential(ctx, postPolicy, keyTime)
+	res, err := handler.getUploadCredential(ctx, postPolicy, keyTime, savePath)
 	if err == nil {
+		res.SessionID = uploadSession.Key
 		res.Callback = apiURL
-		res.Key = key
+		res.UploadURLs = []string{handler.Policy.Server}
 	}
 
 	return res, err
 
+}
+
+// 取消上传凭证
+func (handler Driver) CancelToken(ctx context.Context, uploadSession *serializer.UploadSession) error {
+	return nil
 }
 
 // Meta 获取文件信息
@@ -385,17 +388,11 @@ func (handler Driver) Meta(ctx context.Context, path string) (*MetaData, error) 
 	}, nil
 }
 
-func (handler Driver) getUploadCredential(ctx context.Context, policy UploadPolicy, keyTime string) (serializer.UploadCredential, error) {
-	// 读取上下文中生成的存储路径
-	savePath, ok := ctx.Value(fsctx.SavePathCtx).(string)
-	if !ok {
-		return serializer.UploadCredential{}, errors.New("无法获取存储路径")
-	}
-
+func (handler Driver) getUploadCredential(ctx context.Context, policy UploadPolicy, keyTime string, savePath string) (*serializer.UploadCredential, error) {
 	// 编码上传策略
 	policyJSON, err := json.Marshal(policy)
 	if err != nil {
-		return serializer.UploadCredential{}, err
+		return nil, err
 	}
 	policyEncoded := base64.StdEncoding.EncodeToString(policyJSON)
 
@@ -403,14 +400,14 @@ func (handler Driver) getUploadCredential(ctx context.Context, policy UploadPoli
 	hmacSign := hmac.New(sha1.New, []byte(handler.Policy.SecretKey))
 	_, err = io.WriteString(hmacSign, keyTime)
 	if err != nil {
-		return serializer.UploadCredential{}, err
+		return nil, err
 	}
 	signKey := fmt.Sprintf("%x", hmacSign.Sum(nil))
 
 	sha1Sign := sha1.New()
 	_, err = sha1Sign.Write(policyJSON)
 	if err != nil {
-		return serializer.UploadCredential{}, err
+		return nil, err
 	}
 	stringToSign := fmt.Sprintf("%x", sha1Sign.Sum(nil))
 
@@ -418,15 +415,15 @@ func (handler Driver) getUploadCredential(ctx context.Context, policy UploadPoli
 	hmacFinalSign := hmac.New(sha1.New, []byte(signKey))
 	_, err = hmacFinalSign.Write([]byte(stringToSign))
 	if err != nil {
-		return serializer.UploadCredential{}, err
+		return nil, err
 	}
 	signature := hmacFinalSign.Sum(nil)
 
-	return serializer.UploadCredential{
-		Policy:    policyEncoded,
-		Path:      savePath,
-		AccessKey: handler.Policy.AccessKey,
-		Token:     fmt.Sprintf("%x", signature),
-		KeyTime:   keyTime,
+	return &serializer.UploadCredential{
+		Policy:     policyEncoded,
+		Path:       savePath,
+		AccessKey:  handler.Policy.AccessKey,
+		Credential: fmt.Sprintf("%x", signature),
+		KeyTime:    keyTime,
 	}, nil
 }
